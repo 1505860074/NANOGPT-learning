@@ -1,25 +1,25 @@
 """
-Poor Man's Configurator. Probably a terrible idea. Example usage:
+穷人版配置器（Poor Man's Configurator）。这大概是个糟糕的主意。用法示例：
 $ python train.py config/override_file.py --batch_size=32
-this will first run config/override_file.py, then override batch_size to 32
+这会先运行 config/override_file.py，然后再把 batch_size 覆盖为 32
 
-The code in this file will be run as follows from e.g. train.py:
+本文件中的代码会以如下方式从 train.py 之类的地方运行：
 >>> exec(open('configurator.py').read())
 
-So it's not a Python module, it's just shuttling this code away from train.py
-The code in this script then overrides the globals()
+所以它不是一个 Python 模块，只是把这段代码从 train.py 里挪出去而已。
+本脚本中的代码随后会覆盖 globals()（全局变量）
 
-I know people are not going to love this, I just really dislike configuration
-complexity and having to prepend config. to every single variable. If someone
-comes up with a better simple Python solution I am all ears.
+我知道大家不会喜欢这种做法，我只是真的很不喜欢配置的复杂性、
+不喜欢在每一个变量前面都得加上 config. 前缀。如果有人想出了更好的
+简洁 Python 方案，我非常愿意听。
 """
 
 import sys
 from ast import literal_eval
 
 for arg in sys.argv[1:]:
-    if '=' not in arg:
-        # assume it's the name of a config file
+    if '=' not in arg:  
+        # 假定它是一个配置文件的名字 (assume it's the name of a config file)
         assert not arg.startswith('--')
         config_file = arg
         print(f"Overriding config with {config_file}:")
@@ -27,20 +27,20 @@ for arg in sys.argv[1:]:
             print(f.read())
         exec(open(config_file).read())
     else:
-        # assume it's a --key=value argument
+        # 假定它是一个 --key=value 形式的参数 (assume it's a --key=value argument)
         assert arg.startswith('--')
         key, val = arg.split('=')
         key = key[2:]
         if key in globals():
             try:
-                # attempt to eval it it (e.g. if bool, number, or etc)
+                # 尝试对它求值（比如布尔值、数字等等）(attempt to eval it it (e.g. if bool, number, or etc))
                 attempt = literal_eval(val)
             except (SyntaxError, ValueError):
-                # if that goes wrong, just use the string
+                # 如果求值失败，就直接当字符串用 (if that goes wrong, just use the string)
                 attempt = val
-            # ensure the types match ok
+            # 确保类型能对上 (ensure the types match ok)
             assert type(attempt) == type(globals()[key])
-            # cross fingers
+            # 祈祷别出错 (cross fingers)
             print(f"Overriding: {key} = {attempt}")
             globals()[key] = attempt
         else:
