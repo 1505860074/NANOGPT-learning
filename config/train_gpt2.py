@@ -17,13 +17,13 @@ gradient_accumulation_steps = 5 * 8
 
 # 这让总的 token 数达到 300B
 # this makes total number of tokens be 300B
-max_iters = 600000
-lr_decay_iters = 600000
+maximum_iterations = 600000
+learning_rate_decay_iterations = 600000
 
 # 评估相关
 # eval stuff
-eval_interval = 1000
-eval_iters = 200
+evaluation_interval = 1000
+evaluation_iterations = 200
 log_interval = 10
 
 # 权重衰减

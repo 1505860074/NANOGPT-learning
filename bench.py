@@ -5,11 +5,11 @@ train.py 的一个精简得多的版本，用于跑基准测试（benchmark）
 A much shorter version of train.py for benchmarking
 """
 import os
-from contextlib import nullcontext
-import numpy as np
+import contextlib
+import numpy
 import time
 import torch
-from model import GPTConfig, GPT
+import model
 
 # -----------------------------------------------------------------------------
 batch_size = 12
@@ -18,7 +18,7 @@ bias = False
 real_data = True
 seed = 1337
 device = 'cuda' # 例如：'cpu'、'cuda'、'cuda:0'、'cuda:1' 等
-dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 可选 'float32'、'bfloat16'、'float16'
+data_type = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 可选 'float32'、'bfloat16'、'float16'
 compile = True # 用 PyTorch 2.0 编译模型以提速
 profile = False # 用 pytorch 性能分析器，还是只做简单的计时测速？
 exec(open('configurator.py').read()) # 从命令行或配置文件读取覆盖项
@@ -29,45 +29,45 @@ torch.cuda.manual_seed(seed)
 torch.backends.cuda.matmul.allow_tf32 = True # 矩阵乘法允许使用 tf32
 torch.backends.cudnn.allow_tf32 = True # cudnn 允许使用 tf32
 device_type = 'cuda' if 'cuda' in device else 'cpu' # 供后面 torch.autocast 使用
-ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+pytorch_data_type = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[data_type]
+autocast_context = contextlib.nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=pytorch_data_type)
 
 # 数据加载的初始化
 # data loading init
 if real_data:
     dataset = 'openwebtext'
-    data_dir = os.path.join('data', dataset)
-    train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+    data_directory = os.path.join('data', dataset)
+    train_data = numpy.memmap(os.path.join(data_directory, 'train.bin'), dtype=numpy.uint16, mode='r')
     def get_batch(split):
         data = train_data # 注意：基准测试脚本里忽略 split 参数
-        ix = torch.randint(len(data) - block_size, (batch_size,))
-        x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-        return x, y
+        random_start_indices = torch.randint(len(data) - block_size, (batch_size,))
+        input_batch = torch.stack([torch.from_numpy((data[start_index:start_index+block_size]).astype(numpy.int64)) for start_index in random_start_indices])
+        target_batch = torch.stack([torch.from_numpy((data[start_index+1:start_index+1+block_size]).astype(numpy.int64)) for start_index in random_start_indices])
+        input_batch, target_batch = input_batch.pin_memory().to(device, non_blocking=True), target_batch.pin_memory().to(device, non_blocking=True)
+        return input_batch, target_batch
 else:
     # 或者，如果希望用固定数据、不想被数据加载干扰，就走这条分支
     # alternatively, if fixed data is desired to not care about data loading
-    x = torch.randint(50304, (batch_size, block_size), device=device)
-    y = torch.randint(50304, (batch_size, block_size), device=device)
-    get_batch = lambda split: (x, y)
+    input_batch = torch.randint(50304, (batch_size, block_size), device=device)
+    target_batch = torch.randint(50304, (batch_size, block_size), device=device)
+    get_batch = lambda split: (input_batch, target_batch)
 
 # 模型初始化
 # model init
-gptconf = GPTConfig(
+gpt_config = model.GPTConfig(
     block_size = block_size, # 模型能往回看多远？也就是上下文长度
-    n_layer = 12, n_head = 12, n_embd = 768, # 模型规模
+    number_of_layers = 12, number_of_attention_heads = 12, embedding_dimension = 768, # 模型规模
     dropout = 0, # 为了保证结果可复现
     bias = bias,
 )
-model = GPT(gptconf)
-model.to(device)
+gpt_model = model.GPT(gpt_config)
+gpt_model.to(device)
 
-optimizer = model.configure_optimizers(weight_decay=1e-2, learning_rate=1e-4, betas=(0.9, 0.95), device_type=device_type)
+optimizer = gpt_model.configure_optimizers(weight_decay=1e-2, learning_rate=1e-4, betas=(0.9, 0.95), device_type=device_type)
 
 if compile:
     print("Compiling model...")
-    model = torch.compile(model) # pytorch 2.0
+    gpt_model = torch.compile(gpt_model) # pytorch 2.0
 
 if profile:
     # pytorch 性能分析器的实用文档：
@@ -75,7 +75,7 @@ if profile:
     # - 教程 https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html
     # - API https://pytorch.org/docs/stable/profiler.html#torch.profiler.profile
     wait, warmup, active = 5, 5, 5
-    num_steps = wait + warmup + active
+    number_of_steps = wait + warmup + active
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
         schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=1),
@@ -85,41 +85,41 @@ if profile:
         with_stack=False, # 会带来额外开销，不需要就关掉
         with_flops=True,
         with_modules=False, # 目前仅对 torchscript 模型有效
-    ) as prof:
+    ) as profiler:
 
-        X, Y = get_batch('train')
-        for k in range(num_steps):
-            with ctx:
-                logits, loss = model(X, Y)
-            X, Y = get_batch('train')
+        input_batch, target_batch = get_batch('train')
+        for step in range(number_of_steps):
+            with autocast_context:
+                logits, loss = gpt_model(input_batch, target_batch)
+            input_batch, target_batch = get_batch('train')
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
-            lossf = loss.item()
-            print(f"{k}/{num_steps} loss: {lossf:.4f}")
+            loss_value = loss.item()
+            print(f"{step}/{number_of_steps} loss: {loss_value:.4f}")
 
-            prof.step() # 每一步结束时通知性能分析器
+            profiler.step() # 每一步结束时通知性能分析器
 
 else:
 
     # 简单的计时测速
     # simple benchmarking
     torch.cuda.synchronize()
-    for stage, num_steps in enumerate([10, 20]): # 先预热（burnin），再正式测速
-        t0 = time.time()
-        X, Y = get_batch('train')
-        for k in range(num_steps):
-            with ctx:
-                logits, loss = model(X, Y)
-            X, Y = get_batch('train')
+    for stage, number_of_steps in enumerate([10, 20]): # 先预热（burnin），再正式测速
+        iteration_start_time = time.time()
+        input_batch, target_batch = get_batch('train')
+        for step in range(number_of_steps):
+            with autocast_context:
+                logits, loss = gpt_model(input_batch, target_batch)
+            input_batch, target_batch = get_batch('train')
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
-            lossf = loss.item()
-            print(f"{k}/{num_steps} loss: {lossf:.4f}")
+            loss_value = loss.item()
+            print(f"{step}/{number_of_steps} loss: {loss_value:.4f}")
         torch.cuda.synchronize()
-        t1 = time.time()
-        dt = t1-t0
-        mfu = model.estimate_mfu(batch_size * 1 * num_steps, dt)
+        iteration_end_time = time.time()
+        elapsed_time = iteration_end_time - iteration_start_time
+        model_flops_utilization = gpt_model.estimate_model_flops_utilization(batch_size * 1 * number_of_steps, elapsed_time)
         if stage == 1:
-            print(f"time per iteration: {dt/num_steps*1000:.4f}ms, MFU: {mfu*100:.2f}%")
+            print(f"time per iteration: {elapsed_time/number_of_steps*1000:.4f}ms, MFU: {model_flops_utilization*100:.2f}%")

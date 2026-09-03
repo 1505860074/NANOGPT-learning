@@ -3,9 +3,9 @@
 # train a miniature character-level shakespeare model
 # good for debugging and playing on macbooks and such
 
-out_dir = 'out-shakespeare-char'
-eval_interval = 250 # 评估勤一点，因为我们会过拟合
-eval_iters = 200
+output_directory = 'out-shakespeare-char'
+evaluation_interval = 250 # 评估勤一点，因为我们会过拟合
+evaluation_iterations = 200
 log_interval = 10 # 别打印得太太频繁
 
 # 在这么小的数据集上预计会过拟合，所以只在验证集变好时才保存
@@ -23,18 +23,18 @@ block_size = 256 # 上下文最多回看 256 个字符
 
 # 婴儿版 GPT 模型 :)
 # baby GPT model :)
-n_layer = 6
-n_head = 6
-n_embd = 384
+number_of_layers = 6
+number_of_attention_heads = 6
+embedding_dimension = 384
 dropout = 0.2
 
 learning_rate = 1e-3 # 小网络可以把学习率开高一点
-max_iters = 5000
-lr_decay_iters = 5000 # 通常设成和 max_iters 相等
-min_lr = 1e-4 # 通常取 learning_rate / 10
+maximum_iterations = 5000
+learning_rate_decay_iterations = 5000 # 通常设成和 maximum_iterations 相等
+minimum_learning_rate = 1e-4 # 通常取 learning_rate / 10
 beta2 = 0.99 # 调大一点，因为每次迭代的 token 数很少
 
-warmup_iters = 100 # 可能不是特别必要
+warmup_iterations = 100 # 可能不是特别必要
 
 # 在 macbook 上还要加上
 # on macbook also add

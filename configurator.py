@@ -30,14 +30,14 @@ comes up with a better simple Python solution I am all ears.
 """
 
 import sys
-from ast import literal_eval
+import ast
 
-for arg in sys.argv[1:]:
-    if '=' not in arg:
+for argument in sys.argv[1:]:
+    if '=' not in argument:
         # 认为它是一个配置文件的文件名
         # assume it's the name of a config file
-        assert not arg.startswith('--')
-        config_file = arg
+        assert not argument.startswith('--')
+        config_file = argument
         print(f"Overriding config with {config_file}:")
         with open(config_file) as f:
             print(f.read())
@@ -45,18 +45,18 @@ for arg in sys.argv[1:]:
     else:
         # 认为它是一个 --key=value 形式的参数
         # assume it's a --key=value argument
-        assert arg.startswith('--')
-        key, val = arg.split('=')
+        assert argument.startswith('--')
+        key, value = argument.split('=')
         key = key[2:]
         if key in globals():
             try:
                 # 尝试对它求值（比如它是布尔值、数字等等）
                 # attempt to eval it it (e.g. if bool, number, or etc)
-                attempt = literal_eval(val)
+                attempt = ast.literal_eval(value)
             except (SyntaxError, ValueError):
                 # 如果求值失败，就当成字符串用
                 # if that goes wrong, just use the string
-                attempt = val
+                attempt = value
             # 确保类型对得上
             # ensure the types match ok
             assert type(attempt) == type(globals()[key])
