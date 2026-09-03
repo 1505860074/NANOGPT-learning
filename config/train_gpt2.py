@@ -4,28 +4,28 @@
 # launch as the following (e.g. in a screen session) and wait ~5 days:
 # $ torchrun --standalone --nproc_per_node=8 train.py config/train_gpt2.py
 
-wandb_log = True
-wandb_project = 'owt'
-wandb_run_name='gpt2-124M'
+WANDB_LOG = True
+WANDB_PROJECT = 'owt'
+WANDB_RUN_NAME='gpt2-124M'
 
 # 这几个值让总批大小约为 0.5M
 # these make the total batch size be ~0.5M
 # 12 batch size * 1024 block size * 5 gradaccum * 8 GPUs = 491,520
-batch_size = 12
-block_size = 1024
-gradient_accumulation_steps = 5 * 8
+BATCH_SIZE = 12
+BLOCK_SIZE = 1024
+GRADIENT_ACCUMULATION_STEPS = 5 * 8
 
 # 这让总的 token 数达到 300B
 # this makes total number of tokens be 300B
-maximum_iterations = 600000
-learning_rate_decay_iterations = 600000
+MAXIMUM_ITERATIONS = 600000
+LEARNING_RATE_DECAY_ITERATIONS = 600000
 
 # 评估相关
 # eval stuff
-evaluation_interval = 1000
-evaluation_iterations = 200
-log_interval = 10
+EVALUATION_INTERVAL = 1000
+EVALUATION_ITERATIONS = 200
+LOG_INTERVAL = 10
 
 # 权重衰减
 # weight decay
-weight_decay = 1e-1
+WEIGHT_DECAY = 1e-1

@@ -1,10 +1,10 @@
 # 评测原始的 gpt2 模型
 # evaluate the base gpt2
-# number_of_layers=48, number_of_attention_heads=25, embedding_dimension=1600
+# NUMBER_OF_LAYERS=48, NUMBER_OF_ATTENTION_HEADS=25, EMBEDDING_DIMENSION=1600
 # 1558M 参数量
 # 1558M parameters
-batch_size = 8
-evaluation_iterations = 500 # 多跑一些迭代，估计得更准
-evaluation_only = True
-wandb_log = False
-initialize_from = 'gpt2-xl'
+BATCH_SIZE = 8
+EVALUATION_ITERATIONS = 500 # 多跑一些迭代，估计得更准
+EVALUATION_ONLY = True
+WANDB_LOG = False
+INITIALIZE_FROM = 'gpt2-xl'

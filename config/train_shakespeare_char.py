@@ -3,40 +3,40 @@
 # train a miniature character-level shakespeare model
 # good for debugging and playing on macbooks and such
 
-output_directory = 'out-shakespeare-char'
-evaluation_interval = 250 # 评估勤一点，因为我们会过拟合
-evaluation_iterations = 200
-log_interval = 10 # 别打印得太太频繁
+OUTPUT_DIRECTORY = 'out-shakespeare-char'
+EVALUATION_INTERVAL = 250 # 评估勤一点，因为我们会过拟合
+EVALUATION_ITERATIONS = 200
+LOG_INTERVAL = 10 # 别打印得太太频繁
 
 # 在这么小的数据集上预计会过拟合，所以只在验证集变好时才保存
 # we expect to overfit on this small dataset, so only save when val improves
-always_save_checkpoint = False
+ALWAYS_SAVE_CHECKPOINT = False
 
-wandb_log = False # 想开的话可以从命令行覆盖
-wandb_project = 'shakespeare-char'
-wandb_run_name = 'mini-gpt'
+WANDB_LOG = False # 想开的话可以从命令行覆盖
+WANDB_PROJECT = 'shakespeare-char'
+WANDB_RUN_NAME = 'mini-gpt'
 
-dataset = 'shakespeare_char'
-gradient_accumulation_steps = 1
-batch_size = 64
-block_size = 256 # 上下文最多回看 256 个字符
+DATASET = 'shakespeare_char'
+GRADIENT_ACCUMULATION_STEPS = 1
+BATCH_SIZE = 64
+BLOCK_SIZE = 256 # 上下文最多回看 256 个字符
 
 # 婴儿版 GPT 模型 :)
 # baby GPT model :)
-number_of_layers = 6
-number_of_attention_heads = 6
-embedding_dimension = 384
-dropout = 0.2
+NUMBER_OF_LAYERS = 6
+NUMBER_OF_ATTENTION_HEADS = 6
+EMBEDDING_DIMENSION = 384
+DROPOUT = 0.2
 
-learning_rate = 1e-3 # 小网络可以把学习率开高一点
-maximum_iterations = 5000
-learning_rate_decay_iterations = 5000 # 通常设成和 maximum_iterations 相等
-minimum_learning_rate = 1e-4 # 通常取 learning_rate / 10
-beta2 = 0.99 # 调大一点，因为每次迭代的 token 数很少
+LEARNING_RATE = 1e-3 # 小网络可以把学习率开高一点
+MAXIMUM_ITERATIONS = 5000
+LEARNING_RATE_DECAY_ITERATIONS = 5000 # 通常设成和 MAXIMUM_ITERATIONS 相等
+MINIMUM_LEARNING_RATE = 1e-4 # 通常取 LEARNING_RATE / 10
+BETA2 = 0.99 # 调大一点，因为每次迭代的 token 数很少
 
-warmup_iterations = 100 # 可能不是特别必要
+WARMUP_ITERATIONS = 100 # 可能不是特别必要
 
 # 在 macbook 上还要加上
 # on macbook also add
-# device = 'cpu'  # 只用 cpu 跑
-# compile = False # 不要对模型做 torch compile
+# DEVICE = 'cpu'  # 只用 cpu 跑
+# COMPILE = False # 不要对模型做 torch compile

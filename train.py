@@ -3,7 +3,7 @@
 也可以用分布式数据并行（ddp）做更大规模的训练。
 
 在单张 GPU 上运行的示例：
-$ python train.py --batch_size=32 --compile=False
+$ python train.py --BATCH_SIZE=32 --COMPILE=False
 
 在 1 个节点的 4 张 GPU 上用 DDP 运行的示例：
 $ torchrun --standalone --nproc_per_node=4 train.py
@@ -46,85 +46,85 @@ import model
 # 下面这些默认配置值，是为了在 OpenWebText 上训练一个 gpt2 (124M) 而设计的
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # 输入输出（I/O）
-output_directory = 'out'
+OUTPUT_DIRECTORY = 'out'
 """检查点和日志的输出目录。"""
-evaluation_interval = 2000
+EVALUATION_INTERVAL = 2000
 """每隔多少次迭代做一次评估。"""
-log_interval = 1
+LOG_INTERVAL = 1
 """每隔多少次迭代打印一次训练日志。"""
-evaluation_iterations = 200
+EVALUATION_ITERATIONS = 200
 """每次评估取多少个批次求平均。"""
-evaluation_only = False # if True, script exits right after the first eval
+EVALUATION_ONLY = False # if True, script exits right after the first eval
 """若为 True，脚本在第一次评估结束后立刻退出。"""
-always_save_checkpoint = True # if True, always save a checkpoint after each eval
+ALWAYS_SAVE_CHECKPOINT = True # if True, always save a checkpoint after each eval
 """若为 True，每次评估后都保存检查点。"""
-initialize_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+INITIALIZE_FROM = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 """从哪里初始化模型：'scratch' 从零训练、'resume' 从检查点续训、'gpt2*' 加载 OpenAI 预训练权重。"""
 # wandb 日志记录
 # wandb logging
-wandb_log = False # disabled by default
+WANDB_LOG = False # disabled by default
 """是否把训练指标上报到 wandb，默认关闭。"""
-wandb_project = 'owt'
+WANDB_PROJECT = 'owt'
 """wandb 的项目名。"""
-wandb_run_name = 'gpt2' # 'run' + str(time.time())
+WANDB_RUN_NAME = 'gpt2' # 'run' + str(time.time())
 """wandb 里这次运行的名字。"""
 # 数据
 # data
-dataset = 'openwebtext'
+DATASET = 'openwebtext'
 """数据集名称，对应 data/ 下的子目录名。"""
-gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
-"""梯度累积次数，攒够这么多个微批才更新一次参数。"""
-batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
+GRADIENT_ACCUMULATION_STEPS = 5 * 8 # used to simulate larger batch sizes
+"""梯度累积次数的配置值，攒够这么多个微批才更新一次参数。"""
+BATCH_SIZE = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 """单个微批（micro-batch）的样本条数。"""
-block_size = 1024
+BLOCK_SIZE = 1024
 """上下文长度，模型一次最多能看见多少个 token。"""
 # 模型
 # model
-number_of_layers = 12
+NUMBER_OF_LAYERS = 12
 """Transformer 的层数，也就是堆叠多少个 Block。"""
-number_of_attention_heads = 12
+NUMBER_OF_ATTENTION_HEADS = 12
 """每层的注意力头数。"""
-embedding_dimension = 768
+EMBEDDING_DIMENSION = 768
 """嵌入维度，也是模型的隐藏层宽度。"""
-dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
+DROPOUT = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 """dropout 比率，预训练用 0 比较好，微调时可以试试 0.1 以上。"""
-bias = False # do we use bias inside LayerNorm and Linear layers?
+BIAS = False # do we use bias inside LayerNorm and Linear layers?
 """是否在 LayerNorm 和 Linear 层里使用偏置。"""
 # adamw 优化器
 # adamw optimizer
-learning_rate = 6e-4 # max learning rate
+LEARNING_RATE = 6e-4 # max learning rate
 """最大学习率，也就是预热结束时达到的峰值。"""
-maximum_iterations = 600000 # total number of training iterations
+MAXIMUM_ITERATIONS = 600000 # total number of training iterations
 """训练迭代的总次数，到这个数就停。"""
-weight_decay = 1e-1
+WEIGHT_DECAY = 1e-1
 """权重衰减系数，相当于 L2 正则化的强度。"""
-beta1 = 0.9
+BETA1 = 0.9
 """AdamW 的一阶动量衰减率。"""
-beta2 = 0.95
+BETA2 = 0.95
 """AdamW 的二阶动量衰减率。"""
-gradient_clip_value = 1.0 # clip gradients at this value, or disable if == 0.0
+GRADIENT_CLIP_VALUE = 1.0 # clip gradients at this value, or disable if == 0.0
 """梯度裁剪的阈值，等于 0.0 表示不裁剪。"""
 # 学习率衰减相关设置
 # learning rate decay settings
-decay_learning_rate = True # whether to decay the learning rate
+DECAY_LEARNING_RATE = True # whether to decay the learning rate
 """是否对学习率做衰减，False 则全程用固定学习率。"""
-warmup_iterations = 2000 # how many steps to warm up for
+WARMUP_ITERATIONS = 2000 # how many steps to warm up for
 """学习率线性预热的步数。"""
-learning_rate_decay_iterations = 600000 # should be ~= max_iters per Chinchilla
-"""余弦衰减走完所需的步数，按 Chinchilla 的建议应该 ≈ maximum_iterations。"""
-minimum_learning_rate = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+LEARNING_RATE_DECAY_ITERATIONS = 600000 # should be ~= max_iters per Chinchilla
+"""余弦衰减走完所需的步数，按 Chinchilla 的建议应该 ≈ MAXIMUM_ITERATIONS。"""
+MINIMUM_LEARNING_RATE = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 """最小学习率，也就是余弦衰减的下限。"""
 # DDP 相关设置
 # DDP settings
-backend = 'nccl' # 'nccl', 'gloo', etc.
+BACKEND = 'nccl' # 'nccl', 'gloo', etc.
 """DDP 多卡之间通信用的后端。"""
 # 系统
 # system
-device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-"""训练使用的设备。"""
-data_type = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
+DEVICE = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+"""训练使用的设备的配置值。"""
+DATA_TYPE = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 """训练用的浮点精度，float16 会自动启用 GradScaler。"""
-compile = True # use PyTorch 2.0 to compile the model to be faster
+COMPILE = True # use PyTorch 2.0 to compile the model to be faster
 """是否用 PyTorch 2.0 编译模型以提速。"""
 # -----------------------------------------------------------------------------
 config_keys = [name for name, value in globals().items() if not name.startswith('_') and isinstance(value, (int, float, bool, str))]
@@ -136,10 +136,15 @@ config = {name: globals()[name] for name in config_keys} # 之后记录日志时
 
 # 各种初始化、派生属性，以及 I/O 的设置
 # various inits, derived attributes, I/O setup
+# 下面两个是运行时变量：DDP 模式下它们会被改写，所以不写成大写常量的形式
+device = DEVICE
+"""运行时实际使用的设备；DDP 下会被改成本进程绑定的那张卡。"""
+gradient_accumulation_steps = GRADIENT_ACCUMULATION_STEPS
+"""本进程实际使用的梯度累积次数；DDP 下会按进程数等比缩小。"""
 is_distributed_data_parallel = int(os.environ.get('RANK', -1)) != -1 # 这次是不是 ddp 运行？
 """本次是否以 DDP 多进程方式运行，靠 torchrun 设置的 RANK 环境变量判断。"""
 if is_distributed_data_parallel:
-    torch.distributed.init_process_group(backend=backend)
+    torch.distributed.init_process_group(backend=BACKEND)
     distributed_data_parallel_rank = int(os.environ['RANK'])
     """本进程在所有进程里的全局编号，从 0 开始。"""
     distributed_data_parallel_local_rank = int(os.environ['LOCAL_RANK'])
@@ -163,12 +168,12 @@ else:
     master_process = True
     seed_offset = 0
     distributed_data_parallel_world_size = 1
-tokens_per_iteration = gradient_accumulation_steps * distributed_data_parallel_world_size * batch_size * block_size
+tokens_per_iteration = gradient_accumulation_steps * distributed_data_parallel_world_size * BATCH_SIZE * BLOCK_SIZE
 """每次迭代（也就是每更新一次参数）实际吃掉的 token 总数。"""
 print(f"tokens per iteration will be: {tokens_per_iteration:,}")
 
 if master_process:
-    os.makedirs(output_directory, exist_ok=True)
+    os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # 矩阵乘法允许使用 tf32
 torch.backends.cudnn.allow_tf32 = True # cudnn 允许使用 tf32
@@ -176,14 +181,14 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # 供后面 torch.autocast �
 """设备的大类，只区分 'cuda' 和 'cpu'。"""
 # 注意：float16 这种数据类型会自动启用 GradScaler
 # note: float16 data type will automatically use a GradScaler
-pytorch_data_type = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[data_type]
-"""data_type 这个字符串对应的 torch 数据类型对象。"""
+pytorch_data_type = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[DATA_TYPE]
+"""DATA_TYPE 这个字符串对应的 torch 数据类型对象。"""
 autocast_context = contextlib.nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=pytorch_data_type)
 """混合精度的上下文管理器；在 CPU 上退化成什么都不做的空上下文。"""
 
 # 穷人版数据加载器
 # poor man's data loader
-data_directory = os.path.join('data', dataset)
+data_directory = os.path.join('data', DATASET)
 """当前数据集所在的目录，里面放着 train.bin / val.bin。"""
 def get_batch(split):
     # 每取一个批次都重新创建 numpy.memmap，以避免内存泄漏，依据是：
@@ -192,9 +197,9 @@ def get_batch(split):
         data = numpy.memmap(os.path.join(data_directory, 'train.bin'), dtype=numpy.uint16, mode='r')
     else:
         data = numpy.memmap(os.path.join(data_directory, 'val.bin'), dtype=numpy.uint16, mode='r')
-    random_start_indices = torch.randint(len(data) - block_size, (batch_size,))
-    input_batch = torch.stack([torch.from_numpy((data[start_index:start_index+block_size]).astype(numpy.int64)) for start_index in random_start_indices])
-    target_batch = torch.stack([torch.from_numpy((data[start_index+1:start_index+1+block_size]).astype(numpy.int64)) for start_index in random_start_indices])
+    random_start_indices = torch.randint(len(data) - BLOCK_SIZE, (BATCH_SIZE,))
+    input_batch = torch.stack([torch.from_numpy((data[start_index:start_index+BLOCK_SIZE]).astype(numpy.int64)) for start_index in random_start_indices])
+    target_batch = torch.stack([torch.from_numpy((data[start_index+1:start_index+1+BLOCK_SIZE]).astype(numpy.int64)) for start_index in random_start_indices])
     if device_type == 'cuda':
         # 把输入和目标批次固定（pin）在内存里，这样就能异步地把它们搬到 GPU 上（non_blocking=True）
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
@@ -225,11 +230,11 @@ if os.path.exists(metadata_path):
 
 # 模型初始化
 # model init
-model_arguments = dict(number_of_layers=number_of_layers, number_of_attention_heads=number_of_attention_heads,
-                       embedding_dimension=embedding_dimension, block_size=block_size,
-                       bias=bias, vocabulary_size=None, dropout=dropout) # 先用命令行传进来的参数作为起点
+model_arguments = dict(number_of_layers=NUMBER_OF_LAYERS, number_of_attention_heads=NUMBER_OF_ATTENTION_HEADS,
+                       embedding_dimension=EMBEDDING_DIMENSION, block_size=BLOCK_SIZE,
+                       bias=BIAS, vocabulary_size=None, dropout=DROPOUT) # 先用命令行传进来的参数作为起点
 """构造 GPTConfig 用的参数字典，同时也会原样存进检查点。"""
-if initialize_from == 'scratch':
+if INITIALIZE_FROM == 'scratch':
     # 从零开始初始化一个新模型
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -242,11 +247,11 @@ if initialize_from == 'scratch':
     """模型的结构配置对象。"""
     gpt_model = model.GPT(gpt_config)
     """GPT 模型本体；后面可能被 torch.compile 和 DDP 层层包装。"""
-elif initialize_from == 'resume':
-    print(f"Resuming training from {output_directory}")
+elif INITIALIZE_FROM == 'resume':
+    print(f"Resuming training from {OUTPUT_DIRECTORY}")
     # 从一个检查点继续训练。
     # resume training from a checkpoint.
-    checkpoint_path = os.path.join(output_directory, 'ckpt.pt')
+    checkpoint_path = os.path.join(OUTPUT_DIRECTORY, 'ckpt.pt')
     """要续训的检查点文件路径。"""
     checkpoint = torch.load(checkpoint_path, map_location=device)
     """从磁盘读出来的检查点内容，含权重、优化器状态和超参数。"""
@@ -280,40 +285,40 @@ elif initialize_from == 'resume':
     gpt_model.load_state_dict(state_dictionary)
     iteration_number = checkpoint['iter_num']
     best_validation_loss = checkpoint['best_val_loss']
-elif initialize_from.startswith('gpt2'):
-    print(f"Initializing from OpenAI GPT-2 weights: {initialize_from}")
+elif INITIALIZE_FROM.startswith('gpt2'):
+    print(f"Initializing from OpenAI GPT-2 weights: {INITIALIZE_FROM}")
     # 从 OpenAI 的 GPT-2 权重初始化
     # initialize from OpenAI GPT-2 weights
-    override_arguments = dict(dropout=dropout)
+    override_arguments = dict(dropout=DROPOUT)
     """要覆盖预训练模型默认配置的参数，这里只允许改 dropout。"""
-    gpt_model = model.GPT.from_pretrained(initialize_from, override_arguments)
+    gpt_model = model.GPT.from_pretrained(INITIALIZE_FROM, override_arguments)
     # 把创建出来的配置参数读回来，这样才能正确地存进检查点
     # read off the created config params, so we can store them into checkpoint correctly
     for name in ['number_of_layers', 'number_of_attention_heads', 'embedding_dimension', 'block_size', 'bias', 'vocabulary_size']:
         model_arguments[name] = getattr(gpt_model.config, name)
 # 如果需要，用"模型手术"的方式把模型的 block size 裁小
 # crop down the model block size if desired, using model surgery
-if block_size < gpt_model.config.block_size:
-    gpt_model.crop_block_size(block_size)
-    model_arguments['block_size'] = block_size # 这样检查点里存的才是正确的值
+if BLOCK_SIZE < gpt_model.config.block_size:
+    gpt_model.crop_block_size(BLOCK_SIZE)
+    model_arguments['block_size'] = BLOCK_SIZE # 这样检查点里存的才是正确的值
 gpt_model.to(device)
 
 # 初始化一个 GradScaler。如果 enabled=False，这个 scaler 就是个空操作
 # initialize a GradScaler. If enabled=False scaler is a no-op
-gradient_scaler = torch.cuda.amp.GradScaler(enabled=(data_type == 'float16'))
+gradient_scaler = torch.cuda.amp.GradScaler(enabled=(DATA_TYPE == 'float16'))
 """float16 训练用的梯度缩放器，把 loss 放大以免小梯度下溢；其他精度下是空操作。"""
 
 # 优化器
 # optimizer
-optimizer = gpt_model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+optimizer = gpt_model.configure_optimizers(WEIGHT_DECAY, LEARNING_RATE, (BETA1, BETA2), device_type)
 """AdamW 优化器，二维参数做权重衰减、偏置和 LayerNorm 不做。"""
-if initialize_from == 'resume':
+if INITIALIZE_FROM == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None # 释放内存
 
 # 编译模型
 # compile the model
-if compile:
+if COMPILE:
     print("compiling the model... (takes a ~minute)")
     unoptimized_gpt_model = gpt_model
     """编译前的原始模型，留一份引用备用。"""
@@ -331,8 +336,8 @@ def estimate_loss():
     output_losses = {}
     gpt_model.eval()
     for split in ['train', 'val']:
-        losses = torch.zeros(evaluation_iterations)
-        for batch_index in range(evaluation_iterations):
+        losses = torch.zeros(EVALUATION_ITERATIONS)
+        for batch_index in range(EVALUATION_ITERATIONS):
             input_batch, target_batch = get_batch(split)
             with autocast_context:
                 logits, loss = gpt_model(input_batch, target_batch)
@@ -346,24 +351,24 @@ def estimate_loss():
 def get_learning_rate(iteration):
     # 1) 前 warmup_iterations 步做线性预热
     # 1) linear warmup for warmup_iters steps
-    if iteration < warmup_iterations:
-        return learning_rate * (iteration + 1) / (warmup_iterations + 1)
+    if iteration < WARMUP_ITERATIONS:
+        return LEARNING_RATE * (iteration + 1) / (WARMUP_ITERATIONS + 1)
     # 2) 如果 iteration > learning_rate_decay_iterations，直接返回最小学习率
     # 2) if it > lr_decay_iters, return min learning rate
-    if iteration > learning_rate_decay_iterations:
-        return minimum_learning_rate
+    if iteration > LEARNING_RATE_DECAY_ITERATIONS:
+        return MINIMUM_LEARNING_RATE
     # 3) 在这两者之间，用余弦衰减一路降到最小学习率
     # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (iteration - warmup_iterations) / (learning_rate_decay_iterations - warmup_iterations)
+    decay_ratio = (iteration - WARMUP_ITERATIONS) / (LEARNING_RATE_DECAY_ITERATIONS - WARMUP_ITERATIONS)
     assert 0 <= decay_ratio <= 1
     coefficient = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coefficient 的取值范围是 0..1
-    return minimum_learning_rate + coefficient * (learning_rate - minimum_learning_rate)
+    return MINIMUM_LEARNING_RATE + coefficient * (LEARNING_RATE - MINIMUM_LEARNING_RATE)
 
 # 日志记录
 # logging
-if wandb_log and master_process:
+if WANDB_LOG and master_process:
     import wandb
-    wandb.init(project=wandb_project, name=wandb_run_name, config=config)
+    wandb.init(project=WANDB_PROJECT, name=WANDB_RUN_NAME, config=config)
 
 # 训练主循环
 # training loop
@@ -380,18 +385,18 @@ while True:
 
     # 确定并设置本次迭代使用的学习率
     # determine and set the learning rate for this iteration
-    current_learning_rate = get_learning_rate(iteration_number) if decay_learning_rate else learning_rate
+    current_learning_rate = get_learning_rate(iteration_number) if DECAY_LEARNING_RATE else LEARNING_RATE
     """本次迭代实际使用的学习率。"""
     for parameter_group in optimizer.param_groups:
         parameter_group['lr'] = current_learning_rate
 
     # 在训练集/验证集上评估损失，并写出检查点
     # evaluate the loss on train/val sets and write checkpoints
-    if iteration_number % evaluation_interval == 0 and master_process:
+    if iteration_number % EVALUATION_INTERVAL == 0 and master_process:
         losses = estimate_loss()
         """训练集和验证集上的平均损失。"""
         print(f"step {iteration_number}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        if wandb_log:
+        if WANDB_LOG:
             wandb.log({
                 "iter": iteration_number,
                 "train/loss": losses['train'],
@@ -399,7 +404,7 @@ while True:
                 "lr": current_learning_rate,
                 "mfu": running_model_flops_utilization*100, # 换算成百分比
             })
-        if losses['val'] < best_validation_loss or always_save_checkpoint:
+        if losses['val'] < best_validation_loss or ALWAYS_SAVE_CHECKPOINT:
             best_validation_loss = losses['val']
             if iteration_number > 0:
                 # 下面这些字符串键名是检查点的数据格式，保持不变以便新旧检查点互通
@@ -412,9 +417,9 @@ while True:
                     'config': config,
                 }
                 """准备写入磁盘的检查点内容。"""
-                print(f"saving checkpoint to {output_directory}")
-                torch.save(checkpoint, os.path.join(output_directory, 'ckpt.pt'))
-    if iteration_number == 0 and evaluation_only:
+                print(f"saving checkpoint to {OUTPUT_DIRECTORY}")
+                torch.save(checkpoint, os.path.join(OUTPUT_DIRECTORY, 'ckpt.pt'))
+    if iteration_number == 0 and EVALUATION_ONLY:
         break
 
     # 前向、反向、更新参数；可选地用梯度累积来模拟更大的批大小，
@@ -443,9 +448,9 @@ while True:
         gradient_scaler.scale(loss).backward()
     # 裁剪梯度
     # clip the gradient
-    if gradient_clip_value != 0.0:
+    if GRADIENT_CLIP_VALUE != 0.0:
         gradient_scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(gpt_model.parameters(), gradient_clip_value)
+        torch.nn.utils.clip_grad_norm_(gpt_model.parameters(), GRADIENT_CLIP_VALUE)
     # 让优化器走一步；如果用 fp16 训练，scaler 也跟着走一步
     # step the optimizer and scaler if training in fp16
     gradient_scaler.step(optimizer)
@@ -461,7 +466,7 @@ while True:
     elapsed_time = iteration_end_time - iteration_start_time
     """本次迭代耗时，单位是秒。"""
     iteration_start_time = iteration_end_time
-    if iteration_number % log_interval == 0 and master_process:
+    if iteration_number % LOG_INTERVAL == 0 and master_process:
         # 把 loss 取成 float。注意：这里是一个 CPU-GPU 同步点
         # 乘回去以抵消上面的除法，近似还原出真实的总损失（严格来说应该是求和）
         # get loss as float. note: this is a CPU-GPU sync point
@@ -469,7 +474,7 @@ while True:
         loss_value = loss.item() * gradient_accumulation_steps
         """还原成真实尺度后的损失数值，仅用于打印。"""
         if local_iteration_number >= 5: # 先让训练循环稳定一小会儿
-            model_flops_utilization = raw_gpt_model.estimate_model_flops_utilization(batch_size * gradient_accumulation_steps, elapsed_time)
+            model_flops_utilization = raw_gpt_model.estimate_model_flops_utilization(BATCH_SIZE * gradient_accumulation_steps, elapsed_time)
             """本次迭代的模型算力利用率。"""
             running_model_flops_utilization = model_flops_utilization if running_model_flops_utilization == -1.0 else 0.9*running_model_flops_utilization + 0.1*model_flops_utilization
         print(f"iter {iteration_number}: loss {loss_value:.4f}, time {elapsed_time*1000:.2f}ms, mfu {running_model_flops_utilization*100:.2f}%")
@@ -478,7 +483,7 @@ while True:
 
     # 终止条件
     # termination conditions
-    if iteration_number > maximum_iterations:
+    if iteration_number > MAXIMUM_ITERATIONS:
         break
 
 if is_distributed_data_parallel:
