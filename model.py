@@ -83,7 +83,9 @@ class LayerNorm(torch.nn.Module):
     def __init__(self, number_of_dimensions, bias):
         super().__init__()
         self.weight = torch.nn.Parameter(torch.ones(number_of_dimensions))
+        """缩放参数，逐维放缩归一化之后的数值。"""
         self.bias = torch.nn.Parameter(torch.zeros(number_of_dimensions)) if bias else None
+        """平移参数；bias=False 时为 None。"""
 
     def forward(self, input_tensor):
         return torch.nn.functional.layer_norm(input_tensor, self.weight.shape, self.weight, self.bias, 1e-5)
@@ -96,19 +98,27 @@ class CausalSelfAttention(torch.nn.Module):
         # 所有注意力头的 key、query、value 投影，但打包成一次批量计算
         # key, query, value projections for all heads, but in a batch
         self.combined_query_key_value_projection = torch.nn.Linear(config.embedding_dimension, 3 * config.embedding_dimension, bias=config.bias)
+        """把 query、key、value 三个投影打包成一次矩阵乘法，所以输出宽度是嵌入维度的 3 倍。"""
         # 输出投影
         # output projection
         self.output_projection = torch.nn.Linear(config.embedding_dimension, config.embedding_dimension, bias=config.bias)
+        """注意力的输出投影，把多头拼接后的结果映射回嵌入维度。"""
         # 正则化
         # regularization
         self.attention_dropout = torch.nn.Dropout(config.dropout)
+        """作用在注意力权重上的 dropout。"""
         self.residual_dropout = torch.nn.Dropout(config.dropout)
+        """作用在输出投影结果上的 dropout。"""
         self.number_of_attention_heads = config.number_of_attention_heads
+        """注意力头数。"""
         self.embedding_dimension = config.embedding_dimension
+        """嵌入维度。"""
         self.dropout_probability = config.dropout
+        """dropout 比率，会作为参数传给 Flash Attention。"""
         # flash attention 能让 GPU 火力全开，但只有 PyTorch >= 2.0 才支持
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.use_flash_attention = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        """当前 PyTorch 版本是否支持 Flash Attention。"""
         if not self.use_flash_attention:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             # 因果掩码，确保注意力只作用于输入序列中当前位置左边的内容
@@ -153,9 +163,13 @@ class MLP(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
         self.expansion_projection = torch.nn.Linear(config.embedding_dimension, 4 * config.embedding_dimension, bias=config.bias)
+        """升维投影，把嵌入维度放大到 4 倍。"""
         self.gelu_activation      = torch.nn.GELU()
+        """GELU 激活函数，Block 里的非线性主要由它提供。"""
         self.output_projection    = torch.nn.Linear(4 * config.embedding_dimension, config.embedding_dimension, bias=config.bias)
+        """降维投影，把 4 倍宽度压回嵌入维度。"""
         self.dropout_layer        = torch.nn.Dropout(config.dropout)
+        """作用在 MLP 输出上的 dropout。"""
 
     def forward(self, x):
         x = self.expansion_projection(x)
@@ -169,9 +183,13 @@ class Block(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
         self.layer_normalization_before_attention = LayerNorm(config.embedding_dimension, bias=config.bias)
+        """进注意力子层之前的层归一化（Pre-LN 的做法）。"""
         self.attention = CausalSelfAttention(config)
+        """注意力子层，负责在词与词之间搬运信息。"""
         self.layer_normalization_before_multi_layer_perceptron = LayerNorm(config.embedding_dimension, bias=config.bias)
+        """进 MLP 子层之前的层归一化。"""
         self.multi_layer_perceptron = MLP(config)
+        """MLP 子层，负责逐个位置地把信息加工深。"""
 
     def forward(self, x):
         x = x + self.attention(self.layer_normalization_before_attention(x))
@@ -181,12 +199,19 @@ class Block(torch.nn.Module):
 @dataclasses.dataclass
 class GPTConfig:
     block_size: int = 1024
+    """上下文长度，模型一次最多能看见多少个 token。"""
     vocabulary_size: int = 50304 # GPT-2 词表大小本为 50257，为效率补齐到最近的 64 的倍数
+    """词表大小，也就是输出层要预测多少个候选 token。"""
     number_of_layers: int = 12
+    """Transformer 的层数，也就是堆叠多少个 Block。"""
     number_of_attention_heads: int = 12
+    """每层的注意力头数，必须能整除 embedding_dimension。"""
     embedding_dimension: int = 768
+    """嵌入维度，也是模型的隐藏层宽度。"""
     dropout: float = 0.0
+    """dropout 比率。"""
     bias: bool = True # True：像 GPT-2 那样在 Linear 和 LayerNorm 里带偏置；False：效果略好且更快
+    """是否在 Linear 和 LayerNorm 里使用偏置。"""
 
 class GPT(torch.nn.Module):
 
@@ -195,6 +220,7 @@ class GPT(torch.nn.Module):
         assert config.vocabulary_size is not None
         assert config.block_size is not None
         self.config = config
+        """模型的结构配置对象。"""
 
         self.transformer = torch.nn.ModuleDict(dict(
             word_token_embedding = torch.nn.Embedding(config.vocabulary_size, config.embedding_dimension),
@@ -204,6 +230,7 @@ class GPT(torch.nn.Module):
             final_layer_normalization = LayerNorm(config.embedding_dimension, bias=config.bias),
         ))
         self.language_model_head = torch.nn.Linear(config.embedding_dimension, config.vocabulary_size, bias=False)
+        """输出头，把每个位置的向量映射成整个词表上的分数（logits）。"""
         # 启用权重共享（weight tying）后，用 torch.compile() 会产生一些警告：
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
