@@ -57,8 +57,8 @@ if INITIALIZE_FROM == 'resume':
     """检查点文件的路径。"""
     checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
     """从磁盘读出来的检查点内容。"""
-    # 老检查点用的是缩写字段名，这里统一翻译成现在的全称字段名（新检查点不受影响）
-    gpt_config = model.GPTConfig(**model.convert_legacy_model_arguments(checkpoint['model_args']))
+    # 用检查点里记录的模型结构参数重建配置
+    gpt_config = model.GPTConfig(**checkpoint['model_args'])
     gpt_model = model.GPT(gpt_config)
     """GPT 模型本体。"""
     state_dictionary = checkpoint['model']
@@ -68,8 +68,6 @@ if INITIALIZE_FROM == 'resume':
     for key, value in list(state_dictionary.items()):
         if key.startswith(unwanted_prefix):
             state_dictionary[key[len(unwanted_prefix):]] = state_dictionary.pop(key)
-    # 老检查点的权重键名同样是缩写形式，一并翻译成全称键名
-    state_dictionary = model.convert_legacy_state_dictionary(state_dictionary)
     gpt_model.load_state_dict(state_dictionary)
 elif INITIALIZE_FROM.startswith('gpt2'):
     # 从指定的 GPT-2 模型初始化

@@ -315,8 +315,7 @@ def make_data_loader(device, device_type):
         
         if device_type == 'cuda':
             # 关于 .pin_memory()
-            # 把张量固定（pin）到页锁定内存，锁在物理内存不走 swap，GPU 走 DMA 直传更快
-            # 返回新 Tensor（原张量不变）；只是加速器，不是 .to() 的前提
+            # 把张量固定（pin）到页锁定内存，返回新 Tensor（原张量不变）；只是加速器，不是 .to() 的前提
             # 关于 .to(device, non_blocking=True)
             # 把 Tensor 搬到目标设备（这里指 GPU）；non_blocking=True 表示异步不阻塞 CPU，
             # 但只有内存 pin 过时才算真正异步，没 pin 会退回同步传输
@@ -338,6 +337,10 @@ def build_model(metadata_vocabulary_size, device):
     """
     根据 INITIALIZE_FROM 构建模型，并做 block size 裁剪、搬到目标设备。
     返回 gpt_model 与 model_arguments。
+
+    args:
+        metadata_vocabulary_size : 不重复的 token 数 = 不重复的字符数
+        device : 当前设备类型 + 显卡编号 device = f'cuda:{distributed_data_parallel_local_rank}'
     """
     # 先在这里初始化这两个值，如果 initialize_from='resume'（即从检查点续训）会被覆盖
     # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
@@ -354,39 +357,66 @@ def build_model(metadata_vocabulary_size, device):
 
     # 模型初始化
     # model init
-    model_arguments = dict(number_of_layers=NUMBER_OF_LAYERS, number_of_attention_heads=NUMBER_OF_ATTENTION_HEADS,
-                           embedding_dimension=EMBEDDING_DIMENSION, block_size=BLOCK_SIZE,
-                           bias=BIAS, vocabulary_size=None, dropout=DROPOUT) # 先用命令行传进来的参数作为起点
+    model_arguments = dict(number_of_layers=NUMBER_OF_LAYERS, 
+                        #    Transformer 的层数，也就是堆叠多少个 Block。
+                           number_of_attention_heads=NUMBER_OF_ATTENTION_HEADS,
+                        #    每层的注意力头数。
+                           embedding_dimension=EMBEDDING_DIMENSION, 
+                        #    嵌入维度，也是模型的隐藏层宽度。
+                           block_size=BLOCK_SIZE,
+                        #    上下文长度，模型一次最多能看见多少个 token。
+                           bias=BIAS, 
+                        #    是否在 LayerNorm 和 Linear 层里使用偏置。
+                           vocabulary_size=None, 
+                        #    代表词元的种类数
+                           dropout=DROPOUT)
+                        #    dropout 比率，预训练用 0 比较好，微调时可以试试 0.1 以上
+    
+     # 先用命令行传进来的参数作为起点
     """构造 GPTConfig 用的参数字典，同时也会原样存进检查点。"""
     if INITIALIZE_FROM == 'scratch':
         # 从零开始初始化一个新模型
         # init a new model from scratch
         print("Initializing a new model from scratch")
+
         # 确定从零训练时要用的词表大小
         # determine the vocab size we'll use for from-scratch training
         if metadata_vocabulary_size is None:
             print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
         model_arguments['vocabulary_size'] = metadata_vocabulary_size if metadata_vocabulary_size is not None else 50304
+
         gpt_config = model.GPTConfig(**model_arguments)
-        """模型的结构配置对象。"""
+        # ** : 字典解包
+        
         gpt_model = model.GPT(gpt_config)
         """GPT 模型本体；后面可能被 torch.compile 和 DDP 层层包装。"""
+
     elif INITIALIZE_FROM == 'resume':
         print(f"Resuming training from {OUTPUT_DIRECTORY}")
         # 从一个检查点继续训练。
         # resume training from a checkpoint.
         checkpoint_path = os.path.join(OUTPUT_DIRECTORY, 'ckpt.pt')
         """要续训的检查点文件路径。"""
+
         checkpoint = torch.load(checkpoint_path, map_location=device)
         """从磁盘读出来的检查点内容，含权重、优化器状态和超参数。"""
-        # 老版本的检查点用的是缩写字段名（n_layer 等），这里统一翻译成现在的全称字段名。
-        # 对已经是全称的新检查点，这个转换不会有任何影响。
-        checkpoint_model_arguments = model.convert_legacy_model_arguments(checkpoint['model_args'])
-        """检查点里记录的模型结构参数，字段名已翻译成全称。"""
+        # checkpoint = {
+        #     'model':      raw_gpt_model.state_dict(),     # 模型权重（去掉 DDP 包装的裸模型）
+        #     'optimizer':  optimizer.state_dict(),         # 优化器状态
+        #     'model_args': model_arguments,                # 模型结构参数
+        #     'iter_num':   iteration_number,               # 当前迭代步数
+        #     'best_val_loss': best_validation_loss,        # 历史最佳验证损失
+        #     'config':     config,                         # 命令行配置
+        # }
+        
+        checkpoint_model_arguments = checkpoint['model_args']
+        """检查点里记录的模型结构参数。"""
         # 强制让这几个配置项保持一致，否则连续训都做不了
         # 其余属性（比如 dropout）则可以沿用命令行里想要的值
-        # force these config attributes to be equal otherwise we can't even resume training
+        # force these config attributes to be equal ot
+        # herwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line
+
         for name in ['number_of_layers', 'number_of_attention_heads', 'embedding_dimension', 'block_size', 'bias', 'vocabulary_size']:
             model_arguments[name] = checkpoint_model_arguments[name]
         # 创建模型
@@ -404,8 +434,6 @@ def build_model(metadata_vocabulary_size, device):
         for key, value in list(state_dictionary.items()):
             if key.startswith(unwanted_prefix):
                 state_dictionary[key[len(unwanted_prefix):]] = state_dictionary.pop(key)
-        # 老检查点的权重键名同样是缩写形式，一并翻译成全称键名（新检查点不受影响）
-        state_dictionary = model.convert_legacy_state_dictionary(state_dictionary)
         gpt_model.load_state_dict(state_dictionary)
         iteration_number = checkpoint['iter_num']
         best_validation_loss = checkpoint['best_val_loss']

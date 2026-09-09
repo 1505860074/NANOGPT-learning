@@ -21,9 +21,8 @@ import dataclasses
 
 import torch
 
-# 本项目把模块属性名和配置字段名都改成了完整全称，而 HuggingFace 的 GPT-2 权重、
-# 以及本项目早期版本存下的检查点，用的都是缩写形式的旧键名。下面两张映射表负责在
-# 加载权重时把旧键名翻译成现在的全称键名，从而保住向后兼容。
+# 本项目把模块属性名改成了完整全称，而 HuggingFace 的 GPT-2 权重用的是缩写形式的
+# 旧键名。下面的映射表负责在加载权重时把旧键名翻译成现在的全称键名。
 
 # 旧的模块属性名（也就是权重字典里的键名分段） -> 现在的全称
 LEGACY_TO_CURRENT_MODULE_NAMES = {
@@ -42,14 +41,6 @@ LEGACY_TO_CURRENT_MODULE_NAMES = {
     'lm_head': 'language_model_head',
 }
 
-# 旧的配置字段名 -> 现在的全称（检查点里的 model_args 用的是旧名）
-LEGACY_TO_CURRENT_CONFIG_FIELDS = {
-    'vocab_size': 'vocabulary_size',
-    'n_layer':    'number_of_layers',
-    'n_head':     'number_of_attention_heads',
-    'n_embd':     'embedding_dimension',
-}
-
 def convert_legacy_state_dictionary_key(legacy_key):
     """把一个旧的权重键名翻译成现在的全称键名，例如
     'transformer.h.0.attn.c_attn.weight'
@@ -61,16 +52,6 @@ def convert_legacy_state_dictionary_key(legacy_key):
     if len(parts) >= 2 and parts[-1] == 'bias' and parts[-2] == 'attn':
         parts[-1] = 'causal_mask'
     return '.'.join(LEGACY_TO_CURRENT_MODULE_NAMES.get(part, part) for part in parts)
-
-def convert_legacy_state_dictionary(legacy_state_dictionary):
-    """把整份旧权重字典的键名批量翻译成全称键名。"""
-    return {convert_legacy_state_dictionary_key(key): value
-            for key, value in legacy_state_dictionary.items()}
-
-def convert_legacy_model_arguments(legacy_model_arguments):
-    """把检查点里旧的 model_args 字段名翻译成 GPTConfig 现在的全称字段名。"""
-    return {LEGACY_TO_CURRENT_CONFIG_FIELDS.get(name, name): value
-            for name, value in legacy_model_arguments.items()}
 
 class LayerNorm(torch.nn.Module):
     """
