@@ -416,15 +416,20 @@ def build_model(metadata_vocabulary_size, device):
         # force these config attributes to be equal ot
         # herwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line
-
-        for name in ['number_of_layers', 'number_of_attention_heads', 'embedding_dimension', 'block_size', 'bias', 'vocabulary_size']:
+        for name in ['number_of_layers', 
+                     'number_of_attention_heads', 
+                     'embedding_dimension', 
+                     'block_size', 
+                     'bias', 
+                     'vocabulary_size']:
             model_arguments[name] = checkpoint_model_arguments[name]
+
         # 创建模型
         # create the model
         gpt_config = model.GPTConfig(**model_arguments)
         gpt_model = model.GPT(gpt_config)
         state_dictionary = checkpoint['model']
-        """检查点里存的权重字典。"""
+        """新建一个空壳模型 → 把检查点里存的权重填进去"""
         # 修正状态字典里的键名 :(
         # 说实话我也不知道检查点为什么有时会带上这个前缀，还得再排查排查
         # fix the keys of the state dictionary :(
@@ -434,6 +439,7 @@ def build_model(metadata_vocabulary_size, device):
         for key, value in list(state_dictionary.items()):
             if key.startswith(unwanted_prefix):
                 state_dictionary[key[len(unwanted_prefix):]] = state_dictionary.pop(key)
+        # 把检查点里的权重按参数名一一加载进模型，恢复上次训练的状态
         gpt_model.load_state_dict(state_dictionary)
         iteration_number = checkpoint['iter_num']
         best_validation_loss = checkpoint['best_val_loss']
