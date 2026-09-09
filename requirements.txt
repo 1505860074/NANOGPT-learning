@@ -1,0 +1,7 @@
+numpy==1.26.4
+transformers==4.44.2
+datasets==2.21.0
+tiktoken==0.7.0
+safetensors==0.4.5
+wandb==0.17.9
+tqdm==4.66.5

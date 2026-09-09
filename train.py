@@ -158,58 +158,88 @@ def setup_environment():
     """本次是否以 DDP 多进程方式运行，靠 torchrun 设置的 RANK 环境变量判断。"""
 
     if is_distributed_data_parallel:
-        torch.distributed.init_process_group(backend=BACKEND)
+        torch.distributed.init_process_group(backend=BACKEND) #作用是建立进程间广播/同步的通道
         distributed_data_parallel_rank = int(os.environ['RANK'])
         """本进程在所有进程里的全局编号，从 0 开始。"""
         distributed_data_parallel_local_rank = int(os.environ['LOCAL_RANK'])
         """本进程在本机内的编号，决定它用哪一张显卡。"""
         distributed_data_parallel_world_size = int(os.environ['WORLD_SIZE'])
         """参与本次训练的进程总数。"""
+
+        # 判断本进程使用的是哪一张显卡
         device = f'cuda:{distributed_data_parallel_local_rank}'
-        torch.cuda.set_device(device)
+        # device: 决定用哪一张显卡， 如果非cuda则为-1 
+        torch.cuda.set_device(device) 
+        # 把当前进程默认绑定的 GPU 设为本进程对应的那张卡
+
         master_process = distributed_data_parallel_rank == 0 # 由这个进程负责记日志、存检查点等工作
         """本进程是否为主进程，只有主进程负责记日志和存检查点。"""
+
         seed_offset = distributed_data_parallel_rank # 每个进程拿到不同的随机种子
         """随机种子的偏移量，让每个进程抽到不同的数据。"""
         # 会有 world_size 个进程同时训练，所以可以按比例调小每个进程需要的梯度累积次数
         # world_size number of processes will be training simultaneously, so we can scale
         # down the desired gradient accumulation iterations per process proportionally
         assert gradient_accumulation_steps % distributed_data_parallel_world_size == 0
+        # 每个进程上执行多少步损失计算
         gradient_accumulation_steps //= distributed_data_parallel_world_size
+
+
     else:
         # 如果不是 ddp，那就是在单张 gpu、单个进程上运行
         # if not ddp, we are running on a single gpu, and one process
         master_process = True
         seed_offset = 0
         distributed_data_parallel_world_size = 1
+        """参与本次训练的进程总数。"""
         distributed_data_parallel_local_rank = None
+        """本进程在本机内的编号。"""
+
+    # 只是记录用了多少token
     tokens_per_iteration = gradient_accumulation_steps * distributed_data_parallel_world_size * BATCH_SIZE * BLOCK_SIZE
     """每次迭代（也就是每更新一次参数）实际吃掉的 token 总数。"""
     print(f"tokens per iteration will be: {tokens_per_iteration:,}")
 
+    # 如果当前是主进程
     if master_process:
+        # 在本机上新建output文件夹
         os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
+    
     torch.manual_seed(1337 + seed_offset)
+    """将 torch 全局随机源重置为给定种子，使后续随机操作可复现；+seed_offset 让各进程随机序列互不相同。"""
+    
     torch.backends.cuda.matmul.allow_tf32 = True # 矩阵乘法允许使用 tf32
     torch.backends.cudnn.allow_tf32 = True # cudnn 允许使用 tf32
     device_type = 'cuda' if 'cuda' in device else 'cpu' # 供后面 torch.autocast 使用
     """设备的大类，只区分 'cuda' 和 'cpu'。"""
+
+    
     # 注意：float16 这种数据类型会自动启用 GradScaler
     # note: float16 data type will automatically use a GradScaler
     pytorch_data_type = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[DATA_TYPE]
     """DATA_TYPE 这个字符串对应的 torch 数据类型对象。"""
+
+    # 简单来讲这个上下文的作用就是加速
     autocast_context = contextlib.nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=pytorch_data_type)
     """混合精度的上下文管理器；在 CPU 上退化成什么都不做的空上下文。"""
 
     return {
         'device': device,
+        # 当前设备类型 + 显卡编号 device = f'cuda:{distributed_data_parallel_local_rank}'
         'gradient_accumulation_steps': gradient_accumulation_steps,
+        # 梯度累积步数 gradient_accumulation_steps //= distributed_data_parallel_world_size
         'is_distributed_data_parallel': is_distributed_data_parallel,
+        # 这次是不是 ddp 运行
         'distributed_data_parallel_local_rank': distributed_data_parallel_local_rank,
+        # 本进程在本机内的编号。
         'distributed_data_parallel_world_size': distributed_data_parallel_world_size,
+        # 参与本次训练的进程总数。
         'master_process': master_process,
+        # 本进程是否是主进程
         'device_type': device_type,
+        # cuda or cpu
         'autocast_context': autocast_context,
+        # 混合精度上下文管理器
     }
 
 
@@ -219,20 +249,22 @@ def setup_environment():
 data_directory = os.path.join('data', DATASET)
 """当前数据集所在的目录，里面放着 train.bin / val.bin。"""
 
-
 def build_vocabulary_size():
     """
-    尝试从数据集里的 meta.pkl 推导出词表大小，
-    返回单词表大小（没有 meta.pkl 时返回 None）。
+    数据集里的 meta.pkl 推导出词表大小，（没有 meta.pkl 时返回 None）。
     """
+    # 这里存储了完整的 meta.pkl路径
     metadata_path = os.path.join(data_directory, 'meta.pkl')
     """数据集元信息文件 meta.pkl 的路径。"""
     metadata_vocabulary_size = None
     """从 meta.pkl 读到的词表大小；数据集没提供时为 None。"""
+    # 如果能找到 meta.pkl
     if os.path.exists(metadata_path):
+        # rb：二进制只读模式；可以读出原始二进制内容（原封不动）这样可以之际传给pickle.load解析
         with open(metadata_path, 'rb') as f:
             metadata = pickle.load(f)
             """meta.pkl 里的元信息字典，含词表大小和字符编解码表。"""
+        # 访问键名为vocab_size的值
         metadata_vocabulary_size = metadata['vocab_size'] # 'vocab_size' 是 meta.pkl 的数据格式键名，不随变量改名而变
         print(f"found vocab_size = {metadata_vocabulary_size} (inside {metadata_path})")
     return metadata_vocabulary_size
@@ -249,16 +281,50 @@ def make_data_loader(device, device_type):
         # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
         if split == 'train':
             data = numpy.memmap(os.path.join(data_directory, 'train.bin'), dtype=numpy.uint16, mode='r')
-        else:
+            #  numpy.memmap ：创建一个内存映射文件，把磁盘中的文件当成数组访问
+            # 得到原始训练文件（一个编码后的嵌入输入）
+        else:   
             data = numpy.memmap(os.path.join(data_directory, 'val.bin'), dtype=numpy.uint16, mode='r')
-        random_start_indices = torch.randint(len(data) - BLOCK_SIZE, (BATCH_SIZE,))
-        input_batch = torch.stack([torch.from_numpy((data[start_index:start_index+BLOCK_SIZE]).astype(numpy.int64)) for start_index in random_start_indices])
-        target_batch = torch.stack([torch.from_numpy((data[start_index+1:start_index+1+BLOCK_SIZE]).astype(numpy.int64)) for start_index in random_start_indices])
+            random_start_indices = torch.randint(len(data) - BLOCK_SIZE, (BATCH_SIZE,))
+            # 随机选取点起点作为block的起点（每个block包含多个token）
+            # BATCH_SIZE            = 64    一批有多少个句子
+            # BLOCK_SIZE            = 256   每个句子包含多少个token
+            # EMBEDDING_DIMENSION   = 384   每个token包含多少个维度的向量  
+
+        input_batch = torch.stack([
+        # 关于 torch.stack()
+        # torch.stack：把若干个数组堆叠起来，形成一个（n+1）维数组，这里是2维数组 
+            torch.from_numpy(
+        # 关于 torch.from_numpy()
+        # torch.from_numpy(ndarray)：把 NumPy 数组转成 PyTorch 的 Tensor 对象。
+                (data[start_index : start_index + BLOCK_SIZE]).astype(numpy.int64)
+        # 关于 astype()
+        # train.bin 是 token 数据，每个 token 用 uint16（无符号16位）存，省内存（2字节/个）
+        # .astype(numpy.int64) 把它变成 int64（64位有符号）
+                )
+                for start_index in random_start_indices
+            ])
+
+        target_batch = torch.stack([
+            torch.from_numpy(
+                (data[start_index+1:start_index+1+BLOCK_SIZE]).astype(numpy.int64)
+                ) 
+                for start_index in random_start_indices
+            ])
+        # 同上
+        
         if device_type == 'cuda':
-            # 把输入和目标批次固定（pin）在内存里，这样就能异步地把它们搬到 GPU 上（non_blocking=True）
-            # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-            input_batch, target_batch = input_batch.pin_memory().to(device, non_blocking=True), target_batch.pin_memory().to(device, non_blocking=True)
+            # 关于 .pin_memory()
+            # 把张量固定（pin）到页锁定内存，锁在物理内存不走 swap，GPU 走 DMA 直传更快
+            # 返回新 Tensor（原张量不变）；只是加速器，不是 .to() 的前提
+            # 关于 .to(device, non_blocking=True)
+            # 把 Tensor 搬到目标设备（这里指 GPU）；non_blocking=True 表示异步不阻塞 CPU，
+            # 但只有内存 pin 过时才算真正异步，没 pin 会退回同步传输
+            input_batch = input_batch.pin_memory().to(device, non_blocking=True)
+            target_batch = target_batch.pin_memory().to(device, non_blocking=True)
         else:
+            # 关于 .to(device)
+            # 非 CUDA 设备直接搬家；没 pin 也能用 .to()，证明 pin 只是优化、不是必需
             input_batch, target_batch = input_batch.to(device), target_batch.to(device)
         return input_batch, target_batch
 
