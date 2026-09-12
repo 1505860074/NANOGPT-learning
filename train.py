@@ -279,6 +279,8 @@ def make_data_loader(device, device_type):
     def get_batch(split):
         # 每取一个批次都重新创建 numpy.memmap，以避免内存泄漏，依据是：
         # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
+
+        # 1.从data_directory位置处拿到data数据
         if split == 'train':
             data = numpy.memmap(os.path.join(data_directory, 'train.bin'), dtype=numpy.uint16, mode='r')
             #  numpy.memmap ：创建一个内存映射文件，把磁盘中的文件当成数组访问
@@ -291,6 +293,7 @@ def make_data_loader(device, device_type):
             # BLOCK_SIZE            = 256   每个句子包含多少个token
             # EMBEDDING_DIMENSION   = 384   每个token包含多少个维度的向量  
 
+        # 把input_batch组合为一个堆叠
         input_batch = torch.stack([
         # 关于 torch.stack()
         # torch.stack：把若干个数组堆叠起来，形成一个（n+1）维数组，这里是2维数组 
@@ -305,6 +308,7 @@ def make_data_loader(device, device_type):
                 for start_index in random_start_indices
             ])
 
+        # 2.把target_batch组合为一个堆叠
         target_batch = torch.stack([
             torch.from_numpy(
                 (data[start_index+1:start_index+1+BLOCK_SIZE]).astype(numpy.int64)
@@ -313,6 +317,7 @@ def make_data_loader(device, device_type):
             ])
         # 同上
         
+        # 3.把刚刚处理过的input_batch和target_batch进行一个固定到内存并加速
         if device_type == 'cuda':
             # 关于 .pin_memory()
             # 把张量固定（pin）到页锁定内存，返回新 Tensor（原张量不变）；只是加速器，不是 .to() 的前提
@@ -438,22 +443,40 @@ def build_model(metadata_vocabulary_size, device):
         """torch.compile 会给权重键名加上的前缀，加载前要剥掉。"""
         for key, value in list(state_dictionary.items()):
             if key.startswith(unwanted_prefix):
+                # key[len(unwanted_prefix):] — 字符串切片，去掉 '_orig_mod.' 前缀
+                # pop(key) — 删除旧键并返回它的值
                 state_dictionary[key[len(unwanted_prefix):]] = state_dictionary.pop(key)
-        # 把检查点里的权重按参数名一一加载进模型，恢复上次训练的状态
+
         gpt_model.load_state_dict(state_dictionary)
+        # 把检查点里的权重按参数名一一加载进模型，恢复上次训练的状态
+
         iteration_number = checkpoint['iter_num']
+        # iteration_number：迭代次数
+
         best_validation_loss = checkpoint['best_val_loss']
+        # 最佳验证损失
+
     elif INITIALIZE_FROM.startswith('gpt2'):
         print(f"Initializing from OpenAI GPT-2 weights: {INITIALIZE_FROM}")
         # 从 OpenAI 的 GPT-2 权重初始化
         # initialize from OpenAI GPT-2 weights
         override_arguments = dict(dropout=DROPOUT)
         """要覆盖预训练模型默认配置的参数，这里只允许改 dropout。"""
-        gpt_model = model.GPT.from_pretrained(INITIALIZE_FROM, override_arguments)
+        gpt_model = model.GPT.from_pretrained(
+        # from_pretrained 是从预训练模型中加载权重，快速获得一个已训练好的模型喵～
+            INITIALIZE_FROM, override_arguments
+            # INITIALIZE_FROM：从哪里初始化模型：'scratch' 从零训练、'resume' 从检查点续训、'gpt2*' 加载 OpenAI 预训练权重。
+            )
         # 把创建出来的配置参数读回来，这样才能正确地存进检查点
         # read off the created config params, so we can store them into checkpoint correctly
-        for name in ['number_of_layers', 'number_of_attention_heads', 'embedding_dimension', 'block_size', 'bias', 'vocabulary_size']:
+        for name in ['number_of_layers', 
+                     'number_of_attention_heads', 
+                     'embedding_dimension', 
+                     'block_size', 
+                     'bias', 
+                     'vocabulary_size']:
             model_arguments[name] = getattr(gpt_model.config, name)
+
     # 如果需要，用"模型手术"的方式把模型的 block size 裁小
     # crop down the model block size if desired, using model surgery
     if BLOCK_SIZE < gpt_model.config.block_size:
@@ -471,7 +494,7 @@ def build_model(metadata_vocabulary_size, device):
 # 阶段 4：构建 GradScaler 与优化器
 # =============================================================================
 def build_gradient_scaler():
-    """初始化一个 GradScaler。如果 enabled=False，这个 scaler 就是个空操作。"""
+    """构建梯度缩放器：初始化一个 GradScaler。如果 enabled=False，这个 scaler 就是个空操作。"""
     gradient_scaler = torch.cuda.amp.GradScaler(enabled=(DATA_TYPE == 'float16'))
     """float16 训练用的梯度缩放器，把 loss 放大以免小梯度下溢；其他精度下是空操作。"""
     return gradient_scaler
@@ -481,14 +504,22 @@ def build_optimizer(gpt_model, device_type, checkpoint):
     """
     构建 AdamW 优化器；若是 resume 模式，会从检查点恢复优化器状态。
     checkpoint 使用完毕后会被置空，释放内存。
+
+    AdamW = Adam + Weight decay（权重衰减）。
+    Adam 部分：自适应学习率，每个参数单独分配学习率，
+               梯度大的参数少学、梯度小的参数多学，自动调整步长。
+    W 部分：   解耦的权重衰减，先更新权重再单独做 L2 惩罚，
+               防止参数值过大导致过拟合，效果优于传统 Adam 的 L2 正则。
+    是目前大语言模型训练的主流优化器（GPT-2、LLaMA、Mistral 等都在用）。
     """
-    # 优化器
-    # optimizer
     optimizer = gpt_model.configure_optimizers(WEIGHT_DECAY, LEARNING_RATE, (BETA1, BETA2), device_type)
+    # configure_optimizers：配置优化器
+    # optimizer：优化器
     """AdamW 优化器，二维参数做权重衰减、偏置和 LayerNorm 不做。"""
     if INITIALIZE_FROM == 'resume':
         optimizer.load_state_dict(checkpoint['optimizer'])
-    checkpoint = None # 释放内存
+        # 加载checkpoint的优化器    
+    checkpoint = None # 释放内存    
     return optimizer
 
 
@@ -509,40 +540,68 @@ def compile_and_wrap(gpt_model, is_distributed_data_parallel, distributed_data_p
         unoptimized_gpt_model = gpt_model
         """编译前的原始模型，留一份引用备用。"""
         gpt_model = torch.compile(gpt_model) # 需要 PyTorch 2.0
+        # torch.compile 是干嘛的？
+        # 它是 PyTorch 2.0 引入的一个即时编译器（JIT Compiler）。你把一个 PyTorch 模型（或函数）传进去，它会返回一个编译过的版本，运行起来更快。
+        # 并非真正意义的编译，而是
 
     # 把模型包进 DDP 容器里
     # wrap model into DDP container
     if is_distributed_data_parallel:
-        gpt_model = torch.nn.parallel.DistributedDataParallel(gpt_model, device_ids=[distributed_data_parallel_local_rank])
+        # 如果采用分布式并行策略
+        gpt_model = torch.nn.parallel.DistributedDataParallel(
+            gpt_model, device_ids=[distributed_data_parallel_local_rank]
+            )
+        # 把普通的 GPT 模型包装成支持多 GPU 并行训练的版本，这样每个 GPU 上的模型副本会自动同步梯度。
 
     if unoptimized_gpt_model is None:
         unoptimized_gpt_model = gpt_model
+        # 在 COMPILE=False 时 unoptimized_gpt_model 原样传回，保证代码一致性    
     return gpt_model, unoptimized_gpt_model
 
 
 # =============================================================================
 # 阶段 6：训练需要用到的基础函数（损失评估、学习率调度）
 # =============================================================================
-def make_evaluator(gpt_model, get_batch, autocast_context):
+import collections.abc
+# collections：Python 标准库的一个模块，装"进阶版容器"，比如 deque、Counter、defaultdict、namedtuple 这些。
+# abc：Abstract Base Classes（抽象基类） 的缩写，Callable 就住在这里。
+def make_evaluator(
+    gpt_model: model.GPT,
+    get_batch: collections.abc.Callable[[str], tuple[torch.Tensor, torch.Tensor]],
+    # collections.abc.Callable用来表示这是一个函数，[str]表示传入参数，tuple[torch.Tensor, torch.Tensor]用来表示返回值列表
+    autocast_context: contextlib.AbstractContextManager
+    # contextlib：提供一堆制造/操作上下文管理器的工具
+    # AbstractContextManager：一个抽象基类，用来在类型注解里表示"这是一个上下文管理器"
+    # autocast_context: 是混合精度训练的开关，用 with 打开后，PyTorch 会自动把能用低精度（float16/bfloat16）的运算降精度跑，速度快；把需要精度的运算留在 float32。
+):
     """
+    make_evaluator: 创建一个评估器
     用很多个批次来估算训练集/验证集上的损失，想估多准就能估多准。
     返回 estimate_loss 函数。
     """
-    # 用很多个批次来估算训练集/验证集上的损失，想估多准就能估多准
-    # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
     def estimate_loss():
         output_losses = {}
+        # 初始化损失值
         gpt_model.eval()
+        # def eval() -> GPT 将模块设置为评估模式。
         for split in ['train', 'val']:
             losses = torch.zeros(EVALUATION_ITERATIONS)
+            #  torch.zeros：一个EVALUATION_ITERATIONS个分量的一维张量
             for batch_index in range(EVALUATION_ITERATIONS):
+                # range:返回一个递增序列，0到EVALUATION_ITERATIONS
                 input_batch, target_batch = get_batch(split)
+                # 使用传进来的get_batch()获取input_batch, target_batch
                 with autocast_context:
+                    # 使用我们定义的gpu上下文加速器
                     logits, loss = gpt_model(input_batch, target_batch)
+                    # 自动调用了gpt_model.forward()函数，返回logits, loss
                 losses[batch_index] = loss.item()
+                # loss是一个0维向量，item()把这个值取出来
             output_losses[split] = losses.mean()
+            # 取平均损失    
         gpt_model.train()
+        # nn.Module.train()把模型切到训练模式
         return output_losses
 
     return estimate_loss
@@ -555,10 +614,13 @@ def make_learning_rate_scheduler():
     # 学习率衰减调度器（带预热的余弦衰减）
     # learning rate decay scheduler (cosine with warmup)
     def get_learning_rate(iteration):
+        # iteration:迭代次数
         # 1) 前 warmup_iterations 步做线性预热
         # 1) linear warmup for warmup_iters steps
         if iteration < WARMUP_ITERATIONS:
+            # 学习率线性预热的步数。
             return LEARNING_RATE * (iteration + 1) / (WARMUP_ITERATIONS + 1)
+            # 线性增加 learning_rate = max * n / num
         # 2) 如果 iteration > learning_rate_decay_iterations，直接返回最小学习率
         # 2) if it > lr_decay_iters, return min learning rate
         if iteration > LEARNING_RATE_DECAY_ITERATIONS:
@@ -605,6 +667,7 @@ def main():
     # logging
     if WANDB_LOG and env['master_process']:
         import wandb
+        # wandb 是 Weights & Biases 的缩写，一个机器学习实验追踪与可视化平台~
         wandb.init(project=WANDB_PROJECT, name=WANDB_RUN_NAME, config=config)
 
     # ---- 8. 训练主循环 ----
@@ -645,13 +708,14 @@ def main():
             if losses['val'] < best_validation_loss or ALWAYS_SAVE_CHECKPOINT:
                 best_validation_loss = losses['val']
                 if iteration_number > 0:
+                    # iteration_number：迭代次数
                     # 下面这些字符串键名是检查点的数据格式，保持不变以便新旧检查点互通
                     checkpoint = {
                         'model': raw_gpt_model.state_dict(),
                         'optimizer': optimizer.state_dict(),
                         'model_args': model_arguments,
                         'iter_num': iteration_number,
-                        'best_val_loss': best_validation_loss,
+                        'best_val_loss':  best_validation_loss,
                         'config': config,
                     }
                     """准备写入磁盘的检查点内容。"""
@@ -665,6 +729,8 @@ def main():
         # forward backward update, with optional gradient accumulation to simulate larger batch size
         # and using the GradScaler if data type is float16
         for micro_step in range(env['gradient_accumulation_steps']):
+            # 梯度累积次数的配置值，攒够这么多个微批才更新一次参数。
+
             if env['is_distributed_data_parallel']:
                 # 在 DDP 训练里，只需要在最后一个微步（micro step）同步梯度。
                 # 官方做法是用 no_sync() 上下文管理器，但我实在不喜欢它
@@ -675,15 +741,24 @@ def main():
                 # I really dislike that this bloats the code and forces us to repeat code
                 # looking at the source of that context manager, it just toggles this variable
                 gpt_model.require_backward_grad_sync = (micro_step == env['gradient_accumulation_steps'] - 1)
+                # 需要后向梯度同步 的标质量
+                # 本微批的最后一次时更新
+
             with env['autocast_context']:
+                # autocast_context 混合精度上下文管理器
                 logits, loss = gpt_model(input_batch, target_batch)
-                loss = loss / env['gradient_accumulation_steps'] # 对损失做缩放，以抵消梯度累积带来的放大
+                loss = loss / env['gradient_accumulation_steps'] 
+                # 对损失做缩放，以抵消梯度累积带来的放大
+
             # 趁模型正在 GPU 上做前向传播，立刻异步预取下一个批次
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             input_batch, target_batch = get_batch('train')
+
             # 反向传播；如果用 fp16 训练，还会做梯度缩放
             # backward pass, with gradient scaling if training in fp16
             gradient_scaler.scale(loss).backward()
+            # scale() ：把传入的张量，乘上当前缩放因子，返回一个放大了的新张量
+            # backward() ：算出每个参数的梯度
         # 裁剪梯度
         # clip the gradient
         if GRADIENT_CLIP_VALUE != 0.0:
@@ -692,6 +767,7 @@ def main():
         # 让优化器走一步；如果用 fp16 训练，scaler 也跟着走一步
         # step the optimizer and scaler if training in fp16
         gradient_scaler.step(optimizer)
+        # 执行一次梯度下降更新 
         gradient_scaler.update()
         # 尽早清空梯度，这块内存已经用不上了
         # flush the gradients as soon as we can, no need for this memory anymore
@@ -704,6 +780,8 @@ def main():
         elapsed_time = iteration_end_time - iteration_start_time
         """本次迭代耗时，单位是秒。"""
         iteration_start_time = iteration_end_time
+
+        # 打印训练日志
         if iteration_number % LOG_INTERVAL == 0 and env['master_process']:
             # 把 loss 取成 float。注意：这里是一个 CPU-GPU 同步点
             # 乘回去以抵消上面的除法，近似还原出真实的的总损失（严格来说应该是求和）

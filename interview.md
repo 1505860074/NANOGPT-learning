@@ -80,6 +80,221 @@
 
 ---
 
+## 项目文件导览（各脚本功能）
+
+> 面试前先看这张"仓库地图"：每个脚本是干嘛的、入口在哪、怎么跑，先有个整体印象。
+> 这样被问到"这个文件是干什么的"就能立刻对上，也为后面每一题提供上下文。
+> 符号约定：`有 main` = 脚本有 `main()` 入口函数并用 `if __name__ == '__main__'` 管起来；`被注入` = 没有自己的入口，是被别的脚本 `exec` 进去执行的。
+
+### 一、仓库总览
+
+整个仓库只围绕三件事转：
+
+1. **定义模型** — `model.py`：GPT 长什么样（唯一被当作"库"来 `import` 的文件）。
+2. **跑模型** — `train.py`（训练）、`sample.py`（生成文本）、`bench.py`（测速）。
+3. **后勤** — `config/` + `configurator.py` 负责喂配置，`data/*/prepare.py` 负责造数据。
+
+一条典型的主链路：
+
+```
+data/.../prepare.py  把原始文本切成 token，存成 train.bin / val.bin（有的带 meta.pkl）
+        ↓
+train.py             读 bin 文件训练，产出 out/ckpt.pt（权重+优化器状态+超参快照）
+        ↓
+sample.py            加载 ckpt.pt 或 OpenAI GPT-2 权重，按提示词续写文本
+```
+
+想换超参时，靠 `configurator.py` 解析命令行 `--KEY=value` 或配置文件，直接覆盖各脚本**顶格大写的全局超参**（这就是超参必须留在模块顶层的根本原因）。
+
+### 二、逐文件说明
+
+#### 1. `model.py` — GPT 模型定义（库，无 main）
+
+- **是什么**：整个 GPT 模型唯一的定义处，一个大文件装下了从"一层归一化"到"完整模型"的全部组件。其他脚本都 `import model` 用它，所以它**没有也不该有** `main()`。
+- **包含的组件**（自底向上）：
+  - `LayerNorm`：可选 bias 的层归一化。
+  - `CausalSelfAttention`：因果多头自注意力（Flash 版 / 手写版二选一）。
+  - `MLP`：升维 4 倍 → GELU → 降维的两层网络。
+  - `Block`：一个 Transformer 层 = Pre-LN 注意力子层 + Pre-LN MLP 子层，都带残差。
+  - `GPTConfig`：数据类（`@dataclasses.dataclass`），装全部超参数。
+  - `GPT`：把以上拼起来的完整模型，附带 5 个方法 — `forward`（训练/推理双路径）、`from_pretrained`（搬运 OpenAI 预训练权重）、`configure_optimizers`（二维参数/一维参数分两组）、`generate`（自回归采样）、`estimate_model_flops_utilization`（估算 MFU）。
+- **面试地位**：下方"第 1 题"和附录题库里，几乎所有模型结构问题都以这个文件为主战场。
+
+#### 2. `train.py` — 训练主脚本（有 main）
+
+- **是什么**：训练 GPT 的核心流程，同时支持单卡调试与 DDP 多卡训练。
+- **主流程**（`main()` 里按阶段走）：
+  1. **初始化环境**：DDP 进程组（如多卡）、随机种子（每进程偏移）、设备、混合精度上下文。
+  2. **加载数据**：从 `meta.pkl` 推导词表大小、构造"贫穷版批次加载器"。
+  3. **构建模型**：按 `INITIALIZE_FROM` 三选一——`scratch` 从零 / `resume` 从检查点续训 / `gpt2*` 加载 OpenAI 权重；需要时做 block size 裁剪并搬上设备。
+  4. **建优化器**：`configure_optimizers` 得到 AdamW；resume 模式恢复优化器状态；float16 时配 `GradScaler`。
+  5. **编译 + DDP 包装**：可选 `torch.compile`，多卡再包 `DistributedDataParallel`。
+  6. **准备基础函数**：损失评估器（`estimate_loss`）、学习率调度器（warmup + 余弦衰减）。
+  7. **wandb 日志**（可选）。
+  8. **训练主循环**：定学习率 → 定期评估并保存检查点 → 梯度累积多次前向/反向 → 梯度裁剪 → 优化器 step。
+- **关键产出**：`out/ckpt.pt`，供 `sample.py` 读取。
+- **怎么跑**：单卡 `python train.py --BATCH_SIZE=32 --COMPILE=False`；4 卡 `torchrun --standalone --nproc_per_node=4 train.py`。
+
+#### 3. `sample.py` — 从模型生成文本（有 main）
+
+- **是什么**：加载训练好的模型（`resume` 读本地检查点）或 OpenAI GPT-2 预训练权重，根据一段起始提示词续写出若干条文本。
+- **主流程**（`main()` 里 5 步）：
+  1. 初始化随机种子 + TF32 + 混合精度上下文。
+  2. 加载模型（`load_model`）：resume 剥掉 `_orig_mod.` 前缀后 `load_state_dict`，或 `from_pretrained` 拉 GPT-2 权重；切成 eval 态、搬设备、可选 `torch.compile`。
+  3. 构建编解码函数（`build_codec`）：数据集有 `meta.pkl` 用字符级 `stoi/itos`，没有则回退 GPT-2 BPE（`tiktoken`）。
+  4. 把起始提示词编码成输入张量（`[None, ...]` 补批维度）。
+  5. 循环 `NUMBER_OF_SAMPLES` 次调用 `GPT.generate` 并打印解码结果。
+- **怎么跑**：`python sample.py`；命令行覆盖示例 `python sample.py --NUMBER_OF_SAMPLES=3 --MAX_NEW_TOKENS=200`。
+
+#### 4. `bench.py` — 基准测速（有 main）
+
+- **是什么**：`train.py` 的精简加速版本，只关心"每迭代耗时 + 算力利用率（MFU）"，用于衡量硬件与实现效率。
+- **主流程**（`main()` 里 4 步）：
+  1. 初始化运行环境（种子 + 混合精度）。
+  2. 构造批次加载器：`REAL_DATA=True` 读真实 openwebtext 的 `train.bin`；`False` 用固定随机张量，排除数据加载对测速的干扰。
+  3. 建 GPT 模型 + AdamW 优化器（`configure_optimizers`），可选 `torch.compile`。
+  4. 按 `PROFILE` 二选一：`torch.profiler` 出详细 trace（写到 `./bench_log`），或简单计时打印 `time per iteration` 与 `MFU`。
+- **怎么跑**：`python bench.py`。
+
+#### 5. `configurator.py` — 穷人版配置器（被注入，无 main）
+
+- **是什么**：这段代码会被各脚本顶层的 `exec(open('configurator.py').read())` **直接执行**，用来解析命令行参数（`--KEY=value`）或配置文件，覆盖脚本顶层的全局超参。
+- **工作逻辑**：遍历 `sys.argv[1:]`（命令行参数，去掉脚本名自己）→ 不含 `=` 的当成**配置文件**，`exec` 执行它；含 `=` 的切成键值 → 用 `ast.literal_eval` 安全地把字符串还原成数字/布尔等类型 → 类型核对后 `globals()[key] = value` 写回全局字典。这就是"所有超参必须顶格大写"的原因——覆盖只能落到已存在的全局键上。
+- **为什么这样设计**：作者自嘲"Probably a terrible idea"，为了避开配置系统的复杂度，选择了最朴素粗暴的方案。
+
+#### 6. `config/*.py` — 配置文件（被 configurator exec）
+
+| 文件 | 用途 |
+|---|---|
+| `train_gpt2.py` | 在 8×A100 上从零训 GPT-2 124M 到损失约 2.85 的正式配置（约 5 天，总 batch ~0.5M）。 |
+| `train_shakespeare_char.py` | 字符级莎士比亚迷你模型（6 层 384 维），适合单卡/笔记本调试。 |
+| `finetune_shakespeare.py` | 从 `gpt2-xl` 预训练权重微调莎士比亚文本（恒定小学习率）。 |
+| `eval_gpt2.py` / `eval_gpt2_medium.py` / `eval_gpt2_large.py` / `eval_gpt2_xl.py` | 分别评估 GPT-2 四个尺寸（124M / 350M / 774M / 1558M）在数据上的损失（`EVALUATION_ONLY=True`）。 |
+
+> 它们本质是"纯变量赋值的文件"，被 `configurator.py` exec 进去，所以没有 import、没有 main 是正确设计。
+
+#### 7. `data/*/prepare.py` — 数据预处理（有 main）
+
+三个目录对应三种数据原料，`prepare.py` 把原始文本预处理成训练脚本能直接读的 `train.bin` / `val.bin`（字符级那套还会产出 `meta.pkl`）：
+
+| 文件 | 编码方式 | 产出 | 规模 |
+|---|---|---|---|
+| `shakespeare_char/prepare.py` | 字符级（每个字符一个 id） | `train.bin`、`val.bin`、`meta.pkl` | ~1.1M 字符，65 个不同字符 |
+| `shakespeare/prepare.py` | GPT-2 BPE（`tiktoken`） | `train.bin`、`val.bin` | ~30 万 token |
+| `openwebtext/prepare.py` | GPT-2 BPE（`tiktoken`） | `train.bin`、`val.bin`（无 meta） | ~90 亿 token，HF 缓存占地 54GB |
+
+- **主线一致**：下载或加载数据 → 90/10 切分训练/验证 → 编码成 token → 用 `numpy` 数组（`uint16` 省内存）写成二进制文件落盘。
+- **细节差异**：字符级版自己从文本里数出词表并生成 `meta.pkl`；openwebtext 版用 HuggingFace `datasets` 拉取并行分词、用 `numpy.memmap` 把 90 亿 token 直接映射写盘（不占内存）。
+- **怎么跑**：在对应目录运行 `python prepare.py`。
+
+---
+
+## 训练全景：数学 ↔ 代码对照（速览图）
+
+> 这一节把"模型长什么样、训练怎么跑"用**公式 ↔ 代码行号**的画法整体串一遍，适合通读源码前后对照着看。
+> 为避免重复：名词解释看「术语表」、脚本职责看「项目文件导览」、前向结构的详细问答看「第 1 题」——本节只画图、给行号，不重复展开原理。
+
+### 一、一次参数更新的完整流水线（8 站）
+
+这 8 站 = 训练主循环里跑一圈的核心动作（`train.py:727-772`）：
+
+```
+【1】随机抽样一批数据                 get_batch('train')           train.py:279
+   数学：从数据集均匀随机抽 B 个起点各截 T 长；
+        xᵢ = token[i : i+T]，yᵢ = token[i+1 : i+T+1]（右移一位=“下一个词”的答案）
+   代码：data[start:start+BLOCK_SIZE] / 偏移 +1 的 target_batch    train.py:303/314
+
+【2】前向传播 → logits + loss         gpt_model(input_batch, target_batch)  train.py:749
+   数学：(a) 嵌入相加  h₀ = E(x) + P(位置)
+        (b) N 个 Block  hₐ = Blockₐ(hₐ₋₁)（内部见下方视图二）
+        (c) 出分数    logits = W_head · LN(h₁₂)                    model.py:378-388
+        (d) 交叉熵    ℒ = −(1/Σ)·Σ log P(yₜ | x<ₜ)                 model.py:389
+
+【3】除以累积步数                     loss / GRADIENT_ACCUMULATION_STEPS  train.py:750
+   数学：ℒ ← ℒ/G。攒 G 个微批的梯度加总，尺度才等于一个“大 Batch”
+
+【4】放大损失（仅 fp16）             gradient_scaler.scale(loss)  train.py:759
+   数学：ℒ̃ = 65536·ℒ —— 不改极值点，防微小梯度下溢成 0
+
+【5】反向传播（算梯度）              .backward()                 train.py:759
+   数学：∇θℒ̃ = 65536·∇θℒ，即每个参数的梯度放大 65536 倍
+   实现：链式法则沿计算图倒走，把偏导存进「参数.grad」
+
+【6】还原梯度 + 裁剪                 unscale_ + clip_grad_norm_  train.py:764-765
+   数学：∇ ← ∇/65536；若 ‖∇‖ > g 则 ∇ ← ∇·g/‖∇‖（限幅防梯度爆炸）
+
+【7】优化器真正更新参数              gradient_scaler.step(optimizer)  train.py:768
+   数学：AdamW（动量 + 自适应学习率，公式见下方表格）
+   溢出检查通过才执行；梯度若已 inf/NaN 则本轮跳过更新
+
+【8】清空梯度                        optimizer.zero_grad(set_to_none=True)  train.py:772
+   数学：.grad 置 0，参数不动，下一轮从干净状态重新累积
+```
+
+第 1~8 站 = 一次“大更新”；外层 `while True` 每圈走一次（`train.py:685`）。
+
+### 二、前向传播内部展开（model.py）
+
+```
+x(整数id) ──词嵌入表──→ E(x) (B,T,768)
+位置 0..T-1 ──位置表──→ P      (B,T,768)      h₀ = E + P         model.py:378-380
+                          ▼
+          ┌──── Block ×N（model.py:381-382）─┐
+          │ ① 注意力（跨位置交换信息）  CausalSelfAttention      model.py:98
+          │    h ← h + Attn( LN(h) )      ← 残差 + PreLN
+          │    Q,K,V = h·W（一次性大投影再 split）               model.py:134
+          │    A = softmax(QKᵀ/√d_head + 因果掩码)；out = A·V     model.py:145-153
+          │    多头拼回 → 输出投影 Wₒ      （多头细节见 1.5）
+          │ ② MLP（逐位置深加工）         MLP                     model.py:155
+          │    h ← h + W₂·GELU( W₁·LN(h) )（中间宽 4×768，见 1.4）
+          └──────────────────────────────────────┘
+                          ▼
+     h₁₂ ──Final LN──→ ──W_head(与嵌入共享，weight tying)──→ logits   model.py:383-388
+                          ▼
+     ℒ = cross_entropy(logits, y)：逐 token 的“下一个词预测误差”      model.py:389
+```
+
+### 三、外层训练大纲（迭代 + 调度 + 评估 + 存盘）
+
+```
+while True:                                                  train.py:685
+├─【定学习率】 η = get_learning_rate(iteration_number)       train.py:689
+│    · t < 预热: η = η_max·(t+1)/(T_warm+1)            线性升温   train.py:620
+│    · t > 衰减: η = η_min                              固定最低   train.py:626
+│    · 中间:   η = η_min + (η_max−η_min)·½(1+cos(π·r)) 余弦衰减   train.py:630-633
+│
+├─【定期评估】it % EVALUATION_INTERVAL == 0                    train.py:696
+│    train/val 各取 E 批、纯前向求平均损失 → 打印               estimate_loss  train.py:583
+│    val loss 创新低 → 记录 best_validation_loss（最优模型依据） train.py:710
+│
+├─【定期存盘】it % CHECKPOINT_INTERVAL == 0                     train.py:710-723
+│    存：模型权重 / AdamW 状态 / iteration / 学习率 / best_val → resume 无缝续训 train.py:453
+│
+├─【跑一遍第 1~8 站】（for micro_step in range(G)）              train.py:731
+├─【日志】打印 loss / 耗时 / MFU                               train.py:785-796
+├─ iteration_number += 1;  local_iteration_number += 1          train.py:797-798
+└─【终止】iteration_number > MAXIMUM_ITERATIONS → break          train.py:802
+```
+
+### 四、速查表：数学符号 ↔ 代码位置
+
+| 数学上 | 公式 | 代码 | 位置 |
+|---|---|---|---|
+| 采样一个 batch（下一个词预测） | (xᵢ, xᵢ+1) 错一位 | `get_batch` | train.py:279 |
+| 嵌入相加 | h₀ = E + P | `embedding_dropout(emb+pos)` | model.py:380 |
+| 因果注意力 | A = softmax(QKᵀ/√d + 掩码) · V | `CausalSelfAttention.forward` | model.py:98/145-158 |
+| MLP 前馈 | W₂·GELU(W₁x) | `MLP.forward` | model.py:155 |
+| 语言模型损失 | ℒ = −Σlog P(yₜ\|x<ₜ) | `cross_entropy(...)` | model.py:389 |
+| 梯度 | ∇θℒ | `loss.backward()` | train.py:759 |
+| 梯度缩放（fp16） | ℒ̃ = s·ℒ | `GradScaler.scale` | train.py:759 |
+| 梯度裁剪 | 超范数限幅 | `clip_grad_norm_` | train.py:765 |
+| 优化器更新 (AdamW) | θ ← θ − η·m̂/(√v̂+ε) | `GradScaler.step(optimizer)` | train.py:768 |
+| 热身+余弦学习率 | 见视图三 | `get_learning_rate` | train.py:616 |
+
+一句话把整个训练串起来：**不停地「随机抽一批 → 前向算误差 → 反向求梯度 → 裁剪后沿下坡方向挪参数」，期间按节奏调学习率、评估、存盘，直到迭代数用尽——模型从随机初始值被一圈圈滚进损失的低谷。**
+
+---
+
 ## 第 1 题：讲讲 nanoGPT 里 GPT 的整体结构
 
 **问题**
