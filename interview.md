@@ -164,11 +164,11 @@ sample.py            加载 ckpt.pt 或 OpenAI GPT-2 权重，按提示词续写
 
 #### 6. `config/*.py` — 配置文件（被 configurator exec）
 
-| 文件 | 用途 |
-|---|---|
-| `train_gpt2.py` | 在 8×A100 上从零训 GPT-2 124M 到损失约 2.85 的正式配置（约 5 天，总 batch ~0.5M）。 |
-| `train_shakespeare_char.py` | 字符级莎士比亚迷你模型（6 层 384 维），适合单卡/笔记本调试。 |
-| `finetune_shakespeare.py` | 从 `gpt2-xl` 预训练权重微调莎士比亚文本（恒定小学习率）。 |
+| 文件                                                                                      | 用途                                                                                              |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `train_gpt2.py`                                                                         | 在 8×A100 上从零训 GPT-2 124M 到损失约 2.85 的正式配置（约 5 天，总 batch ~0.5M）。              |
+| `train_shakespeare_char.py`                                                             | 字符级莎士比亚迷你模型（6 层 384 维），适合单卡/笔记本调试。                                      |
+| `finetune_shakespeare.py`                                                               | 从`gpt2-xl` 预训练权重微调莎士比亚文本（恒定小学习率）。                                        |
 | `eval_gpt2.py` / `eval_gpt2_medium.py` / `eval_gpt2_large.py` / `eval_gpt2_xl.py` | 分别评估 GPT-2 四个尺寸（124M / 350M / 774M / 1558M）在数据上的损失（`EVALUATION_ONLY=True`）。 |
 
 > 它们本质是"纯变量赋值的文件"，被 `configurator.py` exec 进去，所以没有 import、没有 main 是正确设计。
@@ -177,11 +177,11 @@ sample.py            加载 ckpt.pt 或 OpenAI GPT-2 权重，按提示词续写
 
 三个目录对应三种数据原料，`prepare.py` 把原始文本预处理成训练脚本能直接读的 `train.bin` / `val.bin`（字符级那套还会产出 `meta.pkl`）：
 
-| 文件 | 编码方式 | 产出 | 规模 |
-|---|---|---|---|
-| `shakespeare_char/prepare.py` | 字符级（每个字符一个 id） | `train.bin`、`val.bin`、`meta.pkl` | ~1.1M 字符，65 个不同字符 |
-| `shakespeare/prepare.py` | GPT-2 BPE（`tiktoken`） | `train.bin`、`val.bin` | ~30 万 token |
-| `openwebtext/prepare.py` | GPT-2 BPE（`tiktoken`） | `train.bin`、`val.bin`（无 meta） | ~90 亿 token，HF 缓存占地 54GB |
+| 文件                            | 编码方式                  | 产出                                     | 规模                           |
+| ------------------------------- | ------------------------- | ---------------------------------------- | ------------------------------ |
+| `shakespeare_char/prepare.py` | 字符级（每个字符一个 id） | `train.bin`、`val.bin`、`meta.pkl` | ~1.1M 字符，65 个不同字符      |
+| `shakespeare/prepare.py`      | GPT-2 BPE（`tiktoken`） | `train.bin`、`val.bin`               | ~30 万 token                   |
+| `openwebtext/prepare.py`      | GPT-2 BPE（`tiktoken`） | `train.bin`、`val.bin`（无 meta）    | ~90 亿 token，HF 缓存占地 54GB |
 
 - **主线一致**：下载或加载数据 → 90/10 切分训练/验证 → 编码成 token → 用 `numpy` 数组（`uint16` 省内存）写成二进制文件落盘。
 - **细节差异**：字符级版自己从文本里数出词表并生成 `meta.pkl`；openwebtext 版用 HuggingFace `datasets` 拉取并行分词、用 `numpy.memmap` 把 90 亿 token 直接映射写盘（不占内存）。
@@ -278,18 +278,18 @@ while True:                                                  train.py:685
 
 ### 四、速查表：数学符号 ↔ 代码位置
 
-| 数学上 | 公式 | 代码 | 位置 |
-|---|---|---|---|
-| 采样一个 batch（下一个词预测） | (xᵢ, xᵢ+1) 错一位 | `get_batch` | train.py:279 |
-| 嵌入相加 | h₀ = E + P | `embedding_dropout(emb+pos)` | model.py:380 |
-| 因果注意力 | A = softmax(QKᵀ/√d + 掩码) · V | `CausalSelfAttention.forward` | model.py:98/145-158 |
-| MLP 前馈 | W₂·GELU(W₁x) | `MLP.forward` | model.py:155 |
-| 语言模型损失 | ℒ = −Σlog P(yₜ\|x<ₜ) | `cross_entropy(...)` | model.py:389 |
-| 梯度 | ∇θℒ | `loss.backward()` | train.py:759 |
-| 梯度缩放（fp16） | ℒ̃ = s·ℒ | `GradScaler.scale` | train.py:759 |
-| 梯度裁剪 | 超范数限幅 | `clip_grad_norm_` | train.py:765 |
-| 优化器更新 (AdamW) | θ ← θ − η·m̂/(√v̂+ε) | `GradScaler.step(optimizer)` | train.py:768 |
-| 热身+余弦学习率 | 见视图三 | `get_learning_rate` | train.py:616 |
+| 数学上                         | 公式                              | 代码                            | 位置                |
+| ------------------------------ | --------------------------------- | ------------------------------- | ------------------- |
+| 采样一个 batch（下一个词预测） | (xᵢ, xᵢ+1) 错一位               | `get_batch`                   | train.py:279        |
+| 嵌入相加                       | h₀ = E + P                       | `embedding_dropout(emb+pos)`  | model.py:380        |
+| 因果注意力                     | A = softmax(QKᵀ/√d + 掩码) · V | `CausalSelfAttention.forward` | model.py:98/145-158 |
+| MLP 前馈                       | W₂·GELU(W₁x)                   | `MLP.forward`                 | model.py:155        |
+| 语言模型损失                   | ℒ = −Σlog P(yₜ\|x<ₜ)         | `cross_entropy(...)`          | model.py:389        |
+| 梯度                           | ∇θℒ                            | `loss.backward()`             | train.py:759        |
+| 梯度缩放（fp16）               | ℒ̃ = s·ℒ                      | `GradScaler.scale`            | train.py:759        |
+| 梯度裁剪                       | 超范数限幅                        | `clip_grad_norm_`             | train.py:765        |
+| 优化器更新 (AdamW)             | θ ← θ − η·m̂/(√v̂+ε)    | `GradScaler.step(optimizer)`  | train.py:768        |
+| 热身+余弦学习率                | 见视图三                          | `get_learning_rate`           | train.py:616        |
 
 一句话把整个训练串起来：**不停地「随机抽一批 → 前向算误差 → 反向求梯度 → 裁剪后沿下坡方向挪参数」，期间按节奏调学习率、评估、存盘，直到迭代数用尽——模型从随机初始值被一圈圈滚进损失的低谷。**
 
@@ -599,12 +599,14 @@ def forward(self, x):
 自注意力要让同一个输入 `x` 扮演三种角色：**Query**（我想找什么）、**Key**（我拿什么标签供匹配）、**Value**（匹配后要汇总的信息）。Q·K 点积得注意力权重，权重再加权 V。三者都是 `x` 经过**不同可学习线性投影**得来，所以必须先「算出 Q/K/V」。
 
 为什么合并成一个 `Linear(768→2304)` 而非三个独立 Linear——**效率**：GPU 上一个大矩阵乘法比三个小的核函数利用率更高，结果等价：
+
 ```python
 # 定义（model.py:100）
 self.combined_query_key_value_projection = torch.nn.Linear(config.embedding_dimension, 3 * config.embedding_dimension, bias=config.bias)
 # 前向（model.py:134）：一次算出 2304 维，再 split 成各 768 维
 query, key, value = self.combined_query_key_value_projection(x).split(self.embedding_dimension, dim=2)
 ```
+
 `.split(768, dim=2)` 把 `(批,序列,2304)` 沿最后一维每 768 切一段，得到 Q、K、V 各 `(批,序列,768)`。
 
 **二、再拆成多头：为什么 + 代码**
@@ -612,6 +614,7 @@ query, key, value = self.combined_query_key_value_projection(x).split(self.embed
 只用「一个 768 维大注意力」全序列只能学**一种**关注模式；拆成 `12` 头 × `64` 维，**每头在自己 64 维子空间独立算一套注意力**，12 个头并行地从不同角度看关系（语法/指代/远距离依赖…），表达更多样。
 
 关键：拆头**几乎不花钱**——Q/K/V 已是 768 维，拆头只是把它**重新解释**成「12×64」，是一次 `view`，不增参数、不增计算：
+
 ```python
 # model.py:135-138
 head_dimension = embedding_dimension // self.number_of_attention_heads          # 768 // 12 = 64
@@ -619,16 +622,19 @@ key   = key.view(batch_size, sequence_length, self.number_of_attention_heads, he
 query = query.view(...).transpose(1, 2)
 value = value.view(...).transpose(1, 2)
 ```
+
 - **`.view(批,序列,12,64)`**：把 768 切成 `12×64`，即分头。
 - **`.transpose(1,2)`**：把「头」维挪到第 1 维 → `(批,12,序列,64)`，让「头」像「批」一样成外层维度，后面注意力矩阵乘法对每个头**独立批量计算**（`model.py:145` Flash 或 `149-153` 手写），头间互不干扰。
 
 算完拼回 + 输出投影：
+
 ```python
 # model.py:154：transpose 挪回 + view 拼接，(批,12,序列,64)→(批,序列,768)
 y = y.transpose(1, 2).contiguous().view(batch_size, sequence_length, embedding_dimension)
 # model.py:158：输出投影，让各头信息真正融合
 y = self.residual_dropout(self.output_projection(y))
 ```
+
 拼接只是把 12 头并排放好，`output_projection`（`model.py:104`）才让**头与头信息混合**。
 
 **为什么是「先算 Q/K/V、再拆头」这个顺序**：「先全宽度投影、再按头切分」数学上**等价于**「每头各有一套 64 维 Q/K/V 投影」，但前者 = 一个大矩阵乘法 + 一次几乎免费的 reshape，后者 = 36 个小矩阵乘法。前者对 GPU 友好得多。所以投影必须在全宽度（768）上一次算完，拆头只能是算完后的廉价视图操作。
@@ -653,6 +659,7 @@ y = self.residual_dropout(self.output_projection(y))
 - ✅「可学习」具体怎么实现（1.3）
 - ✅ MLP 为什么先升维再降维（1.4）
 - ✅ 注意力为什么先算 Q/K/V 再拆多头（1.5）
+
 - [ ] 注意力权重为什么除以 `√head_dimension`？不缩放会怎样？（`model.py:149`）
 - [ ] **因果掩码**如何实现「只能看左边」？Flash 版与手写版各怎么加？（`model.py:145` / `150`）
 - [ ] 为什么自定义 `LayerNorm` 而不用 `nn.LayerNorm`？`bias=False` 的好处？

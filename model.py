@@ -157,7 +157,7 @@ class CausalSelfAttention(torch.nn.Module):
         # x.size()：返回张量各维大小组成的元组，这里拆包赋给三个变量。
 
         # 批量计算所有注意力头的 query、key、value，并把 head 维前移，使其变成批维度
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        # calculate query, key, valuecombined_query_key_value_projections for all heads in batch and move head forward to be the batch dim
         query, key, value = self.combined_query_key_value_projection(x).split(self.embedding_dimension, dim=2)
         # .split(size, dim)：按大小把张量沿指定维切成若干块（切完再拼回原 shape 原本有多个块）。
         #   第一次用的张量 split 需要了解 dim 参数：dim=2 表示沿第 3 个维（长度=3*emb_dim）切成 3 块。
@@ -175,7 +175,13 @@ class CausalSelfAttention(torch.nn.Module):
         if self.use_flash_attention:
             # 用 Flash Attention 的 CUDA 核函数做高效注意力计算
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=self.dropout_probability if self.training else 0, is_causal=True)
+            y = torch.nn.functional.scaled_dot_product_attention(
+                query, 
+                key, 
+                value, 
+                attn_mask=None, 
+                dropout_p=self.dropout_probability if self.training else 0, 
+                is_causal=True)
             # torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, is_causal)：
             #   PyTorch >= 2.0 的快速注意力实现。内部自动完成 softmax(QKᵀ/√d)V，还内置因果掩码优化。
             #   参数：q/k/v 是三个投影；attn_mask 显式掩码（这里用 None）；dropout_p 注意力的丢弃率；

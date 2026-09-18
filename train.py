@@ -794,8 +794,11 @@ def main():
                 """本次迭代的模型算力利用率。"""
                 running_model_flops_utilization = model_flops_utilization if running_model_flops_utilization == -1.0 else 0.9*running_model_flops_utilization + 0.1*model_flops_utilization
             print(f"iter {iteration_number}: loss {loss_value:.4f}, time {elapsed_time*1000:.2f}ms, mfu {running_model_flops_utilization*100:.2f}%")
+
         iteration_number += 1
+        # 递增迭代次数
         local_iteration_number += 1
+        
 
         # 终止条件
         # termination conditions
