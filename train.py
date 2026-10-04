@@ -104,6 +104,14 @@ FACTOR_BRANCH_HIDDEN_DIMENSION = 0
 """因子分支隐藏维度；0 表示跟随 EMBEDDING_DIMENSION。"""
 SHARE_FACTOR_BRANCH_WEIGHTS = False
 """语义分支与位置分支是否共享权重；默认不共享。"""
+# 需求 B：位置特征注入注意力
+# requirement B: inject position feature into attention
+INJECT_POSITION_INTO_ATTENTION = False
+"""是否开启需求 B：位置特征只算一次，逐层注入注意力。"""
+POSITION_FEATURE_HIDDEN_DIMENSION = 0
+"""注意力位置特征分支隐藏维度；0 表示跟随 EMBEDDING_DIMENSION。"""
+SHARE_A_POSITION_BRANCH_FOR_ATTENTION = False
+"""是否复用需求 A 的位置分支（仅在 A 开启且两路独立时生效）。"""
 # adamw 优化器
 # adamw optimizer
 LEARNING_RATE = 6e-4 # max learning rate
@@ -386,7 +394,10 @@ def build_model(metadata_vocabulary_size, device):
                         #    dropout 比率，预训练用 0 比较好，微调时可以试试 0.1 以上
                            use_dual_branch_input=USE_DUAL_BRANCH_INPUT,
                            factor_branch_hidden_dimension=FACTOR_BRANCH_HIDDEN_DIMENSION,
-                           share_factor_branch_weights=SHARE_FACTOR_BRANCH_WEIGHTS)
+                           share_factor_branch_weights=SHARE_FACTOR_BRANCH_WEIGHTS,
+                           inject_position_into_attention=INJECT_POSITION_INTO_ATTENTION,
+                           position_feature_hidden_dimension=POSITION_FEATURE_HIDDEN_DIMENSION,
+                           share_a_position_branch_for_attention=SHARE_A_POSITION_BRANCH_FOR_ATTENTION)
     
      # 先用命令行传进来的参数作为起点
     """构造 GPTConfig 用的参数字典，同时也会原样存进检查点。"""
@@ -440,7 +451,10 @@ def build_model(metadata_vocabulary_size, device):
                      'vocabulary_size',
                      'use_dual_branch_input',
                      'factor_branch_hidden_dimension',
-                     'share_factor_branch_weights']:
+                     'share_factor_branch_weights',
+                     'inject_position_into_attention',
+                     'position_feature_hidden_dimension',
+                     'share_a_position_branch_for_attention']:
             model_arguments[name] = checkpoint_model_arguments[name]
 
         # 创建模型
@@ -475,8 +489,8 @@ def build_model(metadata_vocabulary_size, device):
         # 从 OpenAI 的 GPT-2 权重初始化
         # initialize from OpenAI GPT-2 weights
         # 需求 A：GPT-2 预训练权重里没有因子分支的参数，与开关不兼容，直接报错避免静默失效。
-        if USE_DUAL_BRANCH_INPUT or SHARE_FACTOR_BRANCH_WEIGHTS:
-            raise ValueError("需求 A 的开关暂不支持与 GPT-2 预训练权重初始化同时使用")
+        if USE_DUAL_BRANCH_INPUT or SHARE_FACTOR_BRANCH_WEIGHTS or INJECT_POSITION_INTO_ATTENTION:
+            raise ValueError("需求 A / B 的开关暂不支持与 GPT-2 预训练权重初始化同时使用")
         override_arguments = dict(dropout=DROPOUT)
         """要覆盖预训练模型默认配置的参数，这里只允许改 dropout。"""
         gpt_model = model.GPT.from_pretrained(
@@ -494,7 +508,10 @@ def build_model(metadata_vocabulary_size, device):
                      'vocabulary_size',
                      'use_dual_branch_input',
                      'factor_branch_hidden_dimension',
-                     'share_factor_branch_weights']:
+                     'share_factor_branch_weights',
+                     'inject_position_into_attention',
+                     'position_feature_hidden_dimension',
+                     'share_a_position_branch_for_attention']:
             model_arguments[name] = getattr(gpt_model.config, name)
 
     # 如果需要，用"模型手术"的方式把模型的 block size 裁小

@@ -156,9 +156,13 @@ class CausalSelfAttention(torch.nn.Module):
             # .view(...)：view 是"按新形状排列元素"但共享底层内存（reshape 的轻量版）。
             #   这里把 2 维矩阵改成 4 维 (1,1,block_size,block_size)，为了跟上注意力矩阵的维度对齐。
 
-    def forward(self, x):
+    def forward(self, x, position_feature=None):
         batch_size, sequence_length, embedding_dimension = x.size() # 批大小、序列长度、嵌入维度
         # x.size()：返回张量各维大小组成的元组，这里拆包赋给三个变量。
+        # 需求 B：位置特征在主网络里只算一次，这里加在层归一化之后、投影之前，
+        # 使位置同时进入查询 / 键 / 取值；形状 (序列, 嵌入维度) 自动广播到批上。
+        if position_feature is not None:
+            x = x + position_feature
 
         # 批量计算所有注意力头的 query、key、value，并把 head 维前移，使其变成批维度
         # calculate query, key, valuecombined_query_key_value_projections for all heads in batch and move head forward to be the batch dim
@@ -285,8 +289,8 @@ class Block(torch.nn.Module):
         self.multi_layer_perceptron = MLP(config)
         """MLP 子层，负责逐个位置地把信息加工深。"""
 
-    def forward(self, x):
-        x = x + self.attention(self.layer_normalization_before_attention(x))
+    def forward(self, x, position_feature=None):
+        x = x + self.attention(self.layer_normalization_before_attention(x), position_feature)
         x = x + self.multi_layer_perceptron(self.layer_normalization_before_multi_layer_perceptron(x))
         return x
 
@@ -318,6 +322,14 @@ class GPTConfig:
     share_factor_branch_weights: bool = False
     """语义分支与位置分支是否共享权重；默认不共享（共享会强制两路同构）。"""
 
+    # 需求 B：绝对位置特征注入注意力。位置特征只算一次，广播给每一层注意力。
+    inject_position_into_attention: bool = False
+    """是否把位置特征逐层注入注意力（加在层归一化之后、投影之前）。"""
+    position_feature_hidden_dimension: int = 0
+    """注意力位置特征分支的隐藏维度；0 表示跟随 embedding_dimension。"""
+    share_a_position_branch_for_attention: bool = False
+    """是否复用需求 A 的位置分支作为注意力位置特征（仅在 A 开启且两路独立时生效）。"""
+
 class GPT(torch.nn.Module):
 
     def __init__(self, config):
@@ -343,6 +355,17 @@ class GPT(torch.nn.Module):
             else:
                 transformer_modules['token_factor_branch'] = FactorBranch(config, branch_hidden_dimension)
                 transformer_modules['position_factor_branch'] = FactorBranch(config, branch_hidden_dimension)
+        # 需求 B：位置特征注入注意力。默认独立另建一份位置分支；仅当 A 已建、且两路分支独立时，
+        # 才允许复用 A 的位置分支输出（复用会让两个需求共享权重、无法分别归因）。
+        self.share_position_feature = (
+            config.inject_position_into_attention
+            and config.share_a_position_branch_for_attention
+            and config.use_dual_branch_input
+            and not config.share_factor_branch_weights
+        )
+        if config.inject_position_into_attention and not self.share_position_feature:
+            position_feature_hidden_dimension = config.position_feature_hidden_dimension or config.embedding_dimension
+            transformer_modules['attention_position_branch'] = FactorBranch(config, position_feature_hidden_dimension)
         self.transformer = torch.nn.ModuleDict(transformer_modules)
         # torch.nn.ModuleDict(dict)：一个"字典型"容器，可以用名字访问内部的子模块（如 self.transformer['blocks']）。
         # torch.nn.ModuleList([...])：一个"列表型"容器，存放数量可变的子模块。
@@ -431,17 +454,28 @@ class GPT(torch.nn.Module):
         token_embeddings = self.transformer.word_token_embedding(token_indices) # token 嵌入，形状为 (批, 序列, 嵌入维度)
         position_embeddings = self.transformer.word_position_embedding(positions) # 位置嵌入，形状为 (序列, 嵌入维度)
         # 需求 A：语义与位置两路各自完成因子级抽象与归一化后再相加；开关关闭时保持原有直加。
+        token_branch_output = token_embeddings
+        position_branch_output = position_embeddings
         if self.config.use_dual_branch_input:
             if self.config.share_factor_branch_weights:
                 shared_branch = self.transformer.shared_factor_branch
-                token_embeddings = shared_branch(token_embeddings)
-                position_embeddings = shared_branch(position_embeddings)
+                token_branch_output = shared_branch(token_embeddings)
+                position_branch_output = shared_branch(position_embeddings)
             else:
-                token_embeddings = self.transformer.token_factor_branch(token_embeddings)
-                position_embeddings = self.transformer.position_factor_branch(position_embeddings)
-        x = self.transformer.embedding_dropout(token_embeddings + position_embeddings)
+                token_branch_output = self.transformer.token_factor_branch(token_embeddings)
+                position_branch_output = self.transformer.position_factor_branch(position_embeddings)
+        x = self.transformer.embedding_dropout(token_branch_output + position_branch_output)
+
+        # 需求 B：位置特征只算一次（形状 (序列, 嵌入维度)，不含批维），随后广播给每一层注意力。
+        position_feature = None
+        if self.config.inject_position_into_attention:
+            if self.share_position_feature:
+                position_feature = position_branch_output
+            else:
+                position_feature = self.transformer.attention_position_branch(position_embeddings)
+
         for block in self.transformer.blocks:
-            x = block(x)
+            x = block(x, position_feature)
         x = self.transformer.final_layer_normalization(x)
 
         if targets is not None:

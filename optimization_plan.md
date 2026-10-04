@@ -33,7 +33,7 @@
 
 **实施细节**段在实现时逐个补全，粒度约定：定位到**文件 · 类 · 函数**并附行号，写清每处"改成什么"，但不写整段源码。
 
-**状态。** 需求 A 已在代码中实现（开关默认关闭），尚未做实验验证（设备不允许实验）；需求 B、D 未实施。三个需求的**实施细节**段随实现逐个补全。
+**状态。** 需求 A、B 已在代码中实现（开关默认关闭），尚未做实验验证（设备不允许实验）；需求 D 未实施。三个需求的**实施细节**段随实现逐个补全。
 
 ---
 
@@ -281,7 +281,21 @@ K_j = W_k·(x_j + p_j) = W_k·x_j + W_k·p_j
 
 ### 实施细节
 
-> **待补。** 实现时写明：位置特征的生成位置与形状、贯穿哪些函数的新增入参、注意力内部的注入点、开关的声明位置与默认值、连带需要改的位置（性能基准脚本的调用处、优化器分组）、以及每处的具体改法与改动顺序。
+**复用组件。** 位置特征与 A 的因子分支同构，直接复用 `model.py:245` 的 `FactorBranch`，不新增类。
+
+**开关声明。** `model.py:326` 起在 `GPTConfig` 增加三个字段：`inject_position_into_attention = False`、`position_feature_hidden_dimension = 0`（0 表示跟随 `embedding_dimension`）、`share_a_position_branch_for_attention = False`（复用 A 的位置分支）。对应 `train.py:109` / `train.py:111` / `train.py:113` 三个顶层全局。
+
+**位置特征的生成（只算一次）。** `GPT.forward`（`model.py:470-475`）：B 打开时，用 `attention_position_branch` 把原始位置嵌入（`position_embeddings`，形状 `(序列长度, 嵌入维度)`、**不含批维**）映射为位置特征；若 `self.share_position_feature` 为真（复用 A 的位置分支）则直接取 A 的位置分支输出 `position_branch_output`，不再另算。`model.py:477-478` 把同一份 `position_feature` 传给每个 Block。
+
+**模型接线。** `GPT.__init__`（`model.py:360-368`）：计算 `self.share_position_feature`——要求 B 打开、`share_a_position_branch_for_attention` 打开、A 打开且两路分支独立；仅在不复用时才注册 `attention_position_branch`（`FactorBranch`）。`Block.forward`（`model.py:292-293`）新增 `position_feature` 入参并透传给注意力。`CausalSelfAttention.forward`（`model.py:159-164`）新增同名入参，在**层归一化之后、QKV 投影之前**相加——位置因此同时进入查询 / 键 / 取值（V1）。缩放、因果掩码、softmax、取值投影与输出投影全部未动。
+
+**训练脚本接线。** `train.py:398-400` 把三字段写入 `model_arguments`；`train.py:455-457` 加入 resume 强制一致列表；`train.py:512-514` 加入 gpt2 回读列表；`train.py:492` 的守卫条件补上 `INJECT_POSITION_INTO_ATTENTION`。
+
+**连带影响。** ① 注意力子层与块级前向的签名都新增了带默认值的 `position_feature` 入参，`bench.py` / `sample.py` 均经由 `GPT.forward` 间接调用，无直接调用方需改。② 与 A 的开关互斥：`share_a_position_branch_for_attention` 仅在 A 打开且两路独立时生效，否则自动退回独立另建；「位置完全不进输入端」与「双分支归一化输入」同开的那一格标记为不适用。③ 权重衰减分组无需改：复用 A 分支时无新增参数，独立另建时新分支的 `Linear` 权重 / 偏置同样被 `configure_optimizers` 按维度自动分组。
+
+**改动顺序。** `CausalSelfAttention.forward` → `Block.forward` → `GPTConfig` 字段 → `GPT.__init__` → `GPT.forward` → `train.py` 四处接线。
+
+**验证（CPU 冒烟，未训练）。** 基线 `124,475,904`；仅 B 独立另建 `125,658,624`（+1,182,720，+0.95%）；A + B 独立另建 `128,024,064`（+3,548,160，+2.85%）；A + B 复用 A 的位置分支 `126,841,344`（边际 +0，合计 +1.90%）。七种开关组合前向均通过，开关关闭时无新增键。⚠️ 以上仅为形状 / 参数结论；「位置只进注意力且删输入端相加后低层语义不丢位置信息」「绝对位置交互项真被优化器利用」仍待实验（低层注意力图 / 梯度佐证）。
 
 ---
 
