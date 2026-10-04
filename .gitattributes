@@ -1,3 +1,6 @@
+# 统一换行符：仓库内与检出后一律 LF。属性优先级高于全局 core.autocrlf。
+* text=auto eol=lf
+
 # Override jupyter in Github language stats for more accurate estimate of repo code languages
 # reference: https://github.com/github/linguist/blob/master/docs/overrides.md#generated-code
 *.ipynb linguist-generated
