@@ -96,6 +96,14 @@ DROPOUT = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 """dropout 比率，预训练用 0 比较好，微调时可以试试 0.1 以上。"""
 BIAS = False # do we use bias inside LayerNorm and Linear layers?
 """是否在 LayerNorm 和 Linear 层里使用偏置。"""
+# 需求 A：双分支归一化输入
+# requirement A: dual-branch normalized input
+USE_DUAL_BRANCH_INPUT = False
+"""是否开启需求 A：语义与位置两路各自过因子分支、归一化后再相加。"""
+FACTOR_BRANCH_HIDDEN_DIMENSION = 0
+"""因子分支隐藏维度；0 表示跟随 EMBEDDING_DIMENSION。"""
+SHARE_FACTOR_BRANCH_WEIGHTS = False
+"""语义分支与位置分支是否共享权重；默认不共享。"""
 # adamw 优化器
 # adamw optimizer
 LEARNING_RATE = 6e-4 # max learning rate
@@ -374,8 +382,11 @@ def build_model(metadata_vocabulary_size, device):
                         #    是否在 LayerNorm 和 Linear 层里使用偏置。
                            vocabulary_size=None, 
                         #    代表词元的种类数
-                           dropout=DROPOUT)
+                           dropout=DROPOUT,
                         #    dropout 比率，预训练用 0 比较好，微调时可以试试 0.1 以上
+                           use_dual_branch_input=USE_DUAL_BRANCH_INPUT,
+                           factor_branch_hidden_dimension=FACTOR_BRANCH_HIDDEN_DIMENSION,
+                           share_factor_branch_weights=SHARE_FACTOR_BRANCH_WEIGHTS)
     
      # 先用命令行传进来的参数作为起点
     """构造 GPTConfig 用的参数字典，同时也会原样存进检查点。"""
@@ -426,7 +437,10 @@ def build_model(metadata_vocabulary_size, device):
                      'embedding_dimension', 
                      'block_size', 
                      'bias', 
-                     'vocabulary_size']:
+                     'vocabulary_size',
+                     'use_dual_branch_input',
+                     'factor_branch_hidden_dimension',
+                     'share_factor_branch_weights']:
             model_arguments[name] = checkpoint_model_arguments[name]
 
         # 创建模型
@@ -460,6 +474,9 @@ def build_model(metadata_vocabulary_size, device):
         print(f"Initializing from OpenAI GPT-2 weights: {INITIALIZE_FROM}")
         # 从 OpenAI 的 GPT-2 权重初始化
         # initialize from OpenAI GPT-2 weights
+        # 需求 A：GPT-2 预训练权重里没有因子分支的参数，与开关不兼容，直接报错避免静默失效。
+        if USE_DUAL_BRANCH_INPUT or SHARE_FACTOR_BRANCH_WEIGHTS:
+            raise ValueError("需求 A 的开关暂不支持与 GPT-2 预训练权重初始化同时使用")
         override_arguments = dict(dropout=DROPOUT)
         """要覆盖预训练模型默认配置的参数，这里只允许改 dropout。"""
         gpt_model = model.GPT.from_pretrained(
@@ -474,7 +491,10 @@ def build_model(metadata_vocabulary_size, device):
                      'embedding_dimension', 
                      'block_size', 
                      'bias', 
-                     'vocabulary_size']:
+                     'vocabulary_size',
+                     'use_dual_branch_input',
+                     'factor_branch_hidden_dimension',
+                     'share_factor_branch_weights']:
             model_arguments[name] = getattr(gpt_model.config, name)
 
     # 如果需要，用"模型手术"的方式把模型的 block size 裁小

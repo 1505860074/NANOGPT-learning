@@ -31,9 +31,9 @@
 
 **编号。** 需求 A / B / D 沿用历史，不重排（原需求 C 已折入需求 A 作为理论依据）。
 
-三个需求的**实施细节**段均留空，在真正实现时逐个补全。补全时的粒度约定：定位到**文件 · 类 · 函数**并附行号，写清每处"改成什么"，但不写整段源码。
+**实施细节**段在实现时逐个补全，粒度约定：定位到**文件 · 类 · 函数**并附行号，写清每处"改成什么"，但不写整段源码。
 
-**状态。** 三个需求均未实施、未验证（设备不允许实验）。
+**状态。** 需求 A 已在代码中实现（开关默认关闭），尚未做实验验证（设备不允许实验）；需求 B、D 未实施。三个需求的**实施细节**段随实现逐个补全。
 
 ---
 
@@ -102,7 +102,21 @@ flowchart LR
 
 ### 实施细节
 
-> **待补。** 实现时写明：新增 / 改动的类与函数（含行号定位）、开关的声明位置与默认值、需要跟着改的连带位置（键名转换、优化器分组、配置注入）、以及每处的具体改法与改动顺序。
+**新增组件。** `model.py:245` 新增 `FactorBranch(torch.nn.Module)`：`__init__` 内建 `up_projection`（`Linear(C → H)`）、`gelu_activation`、`down_projection`（`Linear(H → C)`）与 `normalization`（复用现有 `LayerNorm`）；`forward` 固定为「线性 → GELU → 线性 → 归一化」。降维层命名为 `down_projection` 而非 `output_projection`，以避开 `model.py:374` 处按 `endswith('output_projection.weight')` 施加的残差缩放初始化，使分支走常规 `N(0, 0.02)`（由 `GPT.__init__` 里已有的 `self.apply(self._initialize_weights)` 覆盖）。
+
+**开关声明。** `model.py:314` 起在 `GPTConfig` 增加三个字段：`use_dual_branch_input = False`（总开关，默认关 = 原直加）、`factor_branch_hidden_dimension = 0`（0 表示跟随 `embedding_dimension`）、`share_factor_branch_weights = False`（消融维度，默认不共享）。对应 `train.py:101` / `train.py:103` / `train.py:105` 三个顶层全局，供 `configurator.py` 用 `--KEY=value` 或配置文件覆盖。
+
+**模型接线。** `GPT.__init__`（`model.py:339-345`）：开关开时按是否共享注册 `token_factor_branch` / `position_factor_branch`（共享时只注册 `shared_factor_branch`）；开关关时不注册任何新模块，`state_dict` 与基线逐键一致。`GPT.forward`（`model.py:434-441`）：开关开时两路各自过分支后相加，再走原有 `embedding_dropout`；关闭时保持原有直加。
+
+**训练脚本接线。** ① `train.py:387-389` 把三个字段写入 `model_arguments`，否则开关只改了全局、`GPTConfig` 仍取默认值（配置文件路径下会静默不生效）；② `train.py:441-443` 加入 resume 的「强制一致」列表，因为它们决定参数键集合；③ `train.py:495-497` 加入 gpt2 分支的配置回读列表，使检查点记录开关状态；④ `train.py:478` 增加守卫：`INITIALIZE_FROM` 为 `gpt2*` 且开关打开时直接报错——GPT-2 预训练权重没有分支参数，不拦住会静默失效。
+
+**前置修复（连带）。** `model.py:18` 增加 `from __future__ import annotations`。原代码在 `GPTConfig` 定义之前用其作为方法注解（如 `model.py:98`），属于前向引用，导入即抛 `NameError`——这是本次改动前就存在的阻塞性缺陷，不修则任何脚本都跑不起来。
+
+**优化器分组。** 无需改动：`configure_optimizers`（`model.py:589-590`）按 `parameter.dim() >= 2` 分组，分支的 `Linear` 权重自动进衰减组，`Linear` 偏置与 `LayerNorm` 权重 / 偏置自动进不衰减组。
+
+**改动顺序。** 前置修复 → `FactorBranch` → `GPTConfig` 字段 → `GPT.__init__` → `GPT.forward` → `train.py` 四处接线。
+
+**验证（CPU 冒烟，未训练）。** 基线 raw 参数量 `124,475,904`，开启后 `126,841,344`，增量 `2,365,440`（+1.90%），与方案设计一致；开关关闭时 `state_dict` 无新增或删除的键；共享模式新增参数恰为不共享的一半。以上为形状与参数量的冒烟结论，**不代表**「量纲对齐带来可测优势」——该假设仍待实验。
 
 ---
 

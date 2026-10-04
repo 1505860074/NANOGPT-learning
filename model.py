@@ -15,6 +15,10 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
 
+# 让类型注解延迟求值：本文件把 GPTConfig 定义在各类之后，而类方法注解里前向引用了它，
+# 不加这一行会在 import 时抛 NameError（前向引用无法解析）。
+from __future__ import annotations
+
 import math
 # math（Mathematical，数学）：Python 标准库，提供数学函数与常量。本文件用到 sqrt() 开平方、pi、cos 等。
 import inspect
@@ -238,6 +242,31 @@ class MLP(torch.nn.Module):
         x = self.dropout_layer(x)
         return x
 
+class FactorBranch(torch.nn.Module):
+    """把一个因子的嵌入抽象到与嵌入同量纲的空间。
+
+    需求 A 的「因子分支」：线性 → 非线性 → 线性 → 归一化。
+    非线性不可省——否则两层线性映射乘积仍是一个线性矩阵，抽象无从谈起；
+    归一化放在最后，使两个因子的输出同为「零均值、单位方差」后再相加。
+    """
+
+    def __init__(self, config: GPTConfig, hidden_dimension: int):
+        super().__init__()
+        self.up_projection   = torch.nn.Linear(config.embedding_dimension, hidden_dimension, bias=config.bias)
+        """升维投影，把嵌入维度映射到因子分支的隐藏维度。"""
+        self.gelu_activation = torch.nn.GELU()
+        """非线性激活；没有它，两层线性退化为一层线性。"""
+        self.down_projection = torch.nn.Linear(hidden_dimension, config.embedding_dimension, bias=config.bias)
+        """降维投影。命名避开 output_projection，避免命中残差投影的缩放初始化。"""
+        self.normalization   = LayerNorm(config.embedding_dimension, bias=config.bias)
+        """因子级归一化，把该因子输出对齐到「零均值、单位方差」再看量纲相加。"""
+
+    def forward(self, x):
+        x = self.up_projection(x)
+        x = self.gelu_activation(x)
+        x = self.down_projection(x)
+        return self.normalization(x)
+
 class Block(torch.nn.Module):
 
     def __init__(self, config: GPTConfig):
@@ -281,6 +310,14 @@ class GPTConfig:
     bias: bool = True # True：像 GPT-2 那样在 Linear 和 LayerNorm 里带偏置；False：效果略好且更快
     """是否在 Linear 和 LayerNorm 里使用偏置。"""
 
+    # 需求 A：双分支归一化混合（反对"直接相加"）。开关关闭时不注册任何新模块，等价于原直加。
+    use_dual_branch_input: bool = False
+    """是否把输入端的语义直加改为：两路各自过因子分支、归一化后再相加。"""
+    factor_branch_hidden_dimension: int = 0
+    """因子分支的隐藏维度；0 表示跟随 embedding_dimension。"""
+    share_factor_branch_weights: bool = False
+    """语义分支与位置分支是否共享权重；默认不共享（共享会强制两路同构）。"""
+
 class GPT(torch.nn.Module):
 
     def __init__(self, config):
@@ -290,13 +327,23 @@ class GPT(torch.nn.Module):
         self.config = config
         """模型的结构配置对象。"""
 
-        self.transformer = torch.nn.ModuleDict(dict(
+        transformer_modules = dict(
             word_token_embedding = torch.nn.Embedding(config.vocabulary_size, config.embedding_dimension),
             word_position_embedding = torch.nn.Embedding(config.block_size, config.embedding_dimension),
             embedding_dropout = torch.nn.Dropout(config.dropout),
             blocks = torch.nn.ModuleList([Block(config) for _ in range(config.number_of_layers)]),
             final_layer_normalization = LayerNorm(config.embedding_dimension, bias=config.bias),
-        ))
+        )
+        # 需求 A：双分支归一化输入。两路各自过一遍因子分支，再相加。
+        # 开关关闭时不注册任何新模块，state_dict 与基线逐键一致。
+        if config.use_dual_branch_input:
+            branch_hidden_dimension = config.factor_branch_hidden_dimension or config.embedding_dimension
+            if config.share_factor_branch_weights:
+                transformer_modules['shared_factor_branch'] = FactorBranch(config, branch_hidden_dimension)
+            else:
+                transformer_modules['token_factor_branch'] = FactorBranch(config, branch_hidden_dimension)
+                transformer_modules['position_factor_branch'] = FactorBranch(config, branch_hidden_dimension)
+        self.transformer = torch.nn.ModuleDict(transformer_modules)
         # torch.nn.ModuleDict(dict)：一个"字典型"容器，可以用名字访问内部的子模块（如 self.transformer['blocks']）。
         # torch.nn.ModuleList([...])：一个"列表型"容器，存放数量可变的子模块。
         # torch.nn.Embedding(vocab_size, dim)：查表层（embedding=嵌入）。
@@ -383,6 +430,15 @@ class GPT(torch.nn.Module):
         # forward the GPT model itself
         token_embeddings = self.transformer.word_token_embedding(token_indices) # token 嵌入，形状为 (批, 序列, 嵌入维度)
         position_embeddings = self.transformer.word_position_embedding(positions) # 位置嵌入，形状为 (序列, 嵌入维度)
+        # 需求 A：语义与位置两路各自完成因子级抽象与归一化后再相加；开关关闭时保持原有直加。
+        if self.config.use_dual_branch_input:
+            if self.config.share_factor_branch_weights:
+                shared_branch = self.transformer.shared_factor_branch
+                token_embeddings = shared_branch(token_embeddings)
+                position_embeddings = shared_branch(position_embeddings)
+            else:
+                token_embeddings = self.transformer.token_factor_branch(token_embeddings)
+                position_embeddings = self.transformer.position_factor_branch(position_embeddings)
         x = self.transformer.embedding_dropout(token_embeddings + position_embeddings)
         for block in self.transformer.blocks:
             x = block(x)
