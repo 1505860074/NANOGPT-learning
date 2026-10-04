@@ -202,6 +202,7 @@ def main():
             # 'r' 读取文本模式；encoding='utf-8' 指定用 UTF-8 字符集解码，中文注释这样才不乱码。
             start_text = f.read()
     start_token_ids = encode(start_text)
+    # 构造输入张量
     input_token_indices = torch.tensor(start_token_ids, dtype=torch.long, device=DEVICE)[None, ...] # 前面补一个批维度
     # torch.tensor(列表, dtype, device)：用 Python 列表直接构造张量，可指定数据类型与设备。
     #   [None, ...]：给张量加一个"尺寸 1 的新维度"放在最前面。模型输入要求 (批, 序列)，原来只有 (序列)，
