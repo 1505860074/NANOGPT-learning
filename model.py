@@ -271,6 +271,38 @@ class FactorBranch(torch.nn.Module):
         x = self.down_projection(x)
         return self.normalization(x)
 
+class CrossResidualKernel(torch.nn.Module):
+    """需求 D 的不对称交叉残差核（V1，跨位置全交叉）。
+
+    x ← x + softmax( x · Fᵀ / √C ) · F：第一因子取进入残差前的当前值 x，
+    第二因子取本层输出 F，因此 s_ij ≠ s_ji，信息从本层输出单向流入当前值，
+    与块内注意力（内容 × 内容）语义不重复。核不含可学习参数；因果掩码注册为
+    非持久缓冲区（persistent=False），不进入 state_dict，保证旧检查点可加载。
+    """
+
+    def __init__(self, block_size):
+        super().__init__()
+        # 掩码保持 2 维 (block_size, block_size)：与相似度矩阵 (批, 序列, 序列) 广播时
+        # 不会像 4 维 (1,1,S,S) 那样把 leading 单例维撑成真实维。
+        self.register_buffer(
+            "causal_mask",
+            torch.tril(torch.ones(block_size, block_size, dtype=torch.bool)),
+            persistent=False,
+        )
+
+    def forward(self, current, layer_output):
+        scale = 1.0 / math.sqrt(layer_output.size(-1))
+        similarity = (current @ layer_output.transpose(-2, -1)) * scale
+        sequence_length = layer_output.size(1)
+        mask = self.causal_mask[:sequence_length, :sequence_length]
+        similarity = similarity.masked_fill(~mask, float("-inf"))
+        weights = torch.nn.functional.softmax(similarity, dim=-1)
+        return weights @ layer_output
+
+    def crop_block_size(self, block_size):
+        """把自身的因果掩码裁到更小的上下文，与 GPT.crop_block_size 配套。"""
+        self.causal_mask = self.causal_mask[:block_size, :block_size]
+
 class Block(torch.nn.Module):
 
     def __init__(self, config: GPTConfig):
@@ -288,10 +320,23 @@ class Block(torch.nn.Module):
         """进 MLP 子层之前的层归一化。"""
         self.multi_layer_perceptron = MLP(config)
         """MLP 子层，负责逐个位置地把信息加工深。"""
+        self.use_cross_residual_kernel = config.use_cross_residual_kernel
+        """需求 D 开关；关闭时两处残差保持朴素直加。"""
+        if config.use_cross_residual_kernel:
+            self.residual_kernel = CrossResidualKernel(config.block_size)
+            """注意力残差与 MLP 残差共用的交叉核（无参数，掩码每层一份）。"""
+
+    def apply_residual(self, x, layer_output):
+        """两处残差的统一出口：默认直加；需求 D 打开时改为不对称交叉混合。"""
+        if self.use_cross_residual_kernel:
+            return x + self.residual_kernel(x, layer_output)
+        return x + layer_output
 
     def forward(self, x, position_feature=None):
-        x = x + self.attention(self.layer_normalization_before_attention(x), position_feature)
-        x = x + self.multi_layer_perceptron(self.layer_normalization_before_multi_layer_perceptron(x))
+        attention_output = self.attention(self.layer_normalization_before_attention(x), position_feature)
+        x = self.apply_residual(x, attention_output)
+        mlp_output = self.multi_layer_perceptron(self.layer_normalization_before_multi_layer_perceptron(x))
+        x = self.apply_residual(x, mlp_output)
         return x
 
 @dataclasses.dataclass
@@ -329,6 +374,10 @@ class GPTConfig:
     """注意力位置特征分支的隐藏维度；0 表示跟随 embedding_dimension。"""
     share_a_position_branch_for_attention: bool = False
     """是否复用需求 A 的位置分支作为注意力位置特征（仅在 A 开启且两路独立时生效）。"""
+
+    # 需求 D：不对称交叉残差。核无参数，代价在算力与显存。
+    use_cross_residual_kernel: bool = False
+    """是否把两处残差从朴素直加改为不对称交叉混合（当前值 × 本层输出）。"""
 
 class GPT(torch.nn.Module):
 
@@ -512,6 +561,9 @@ class GPT(torch.nn.Module):
         for block in self.transformer.blocks:
             if hasattr(block.attention, 'causal_mask'):
                 block.attention.causal_mask = block.attention.causal_mask[:,:,:block_size,:block_size]
+            # 需求 D：残差核自建的下三角掩码同样要裁小。
+            if block.use_cross_residual_kernel:
+                block.residual_kernel.crop_block_size(block_size)
 
     @classmethod
     # @classmethod：类方法装饰器。被它修饰的方法第一个参数自动接收"类本身"（习惯命名 cls），
