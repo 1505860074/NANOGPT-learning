@@ -726,11 +726,12 @@ class GPT(torch.nn.Module):
 
     @torch.no_grad()
     # 这里 @torch.no_grad() 用法=函数装饰器：把 generate 整个包在"不记录梯度"的上下文里执行（推理用）。
-    def generate(self, token_indices, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, token_indices, max_new_tokens, temperature=1.0, top_k=None, eot_token=None):
         """
         接收一段作为条件的索引序列 token_indices（形状为 (批, 序列) 的 LongTensor），把这个序列
         续写 max_new_tokens 次，每次都把预测结果重新喂回模型。
         用它的时候，多半应该先确保模型处于 eval() 模式。
+        传入 eot_token 后，一旦采样到该文本结束符就提前停止，不再凑满 max_new_tokens。
 
         --- 以下为英文原文 ---
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
@@ -768,5 +769,8 @@ class GPT(torch.nn.Module):
             token_indices = torch.cat((token_indices, next_token_index), dim=1)
             # torch.cat((a, b), dim)：沿着 dim 维把若干个张量拼接起来（concatenate）。
             #   这里把新采到的 token 拼到原序列的时间维（第 1 维）末尾，实现"自我续写"。
+            # 采样到文本结束符就提前停止；未传入 eot_token 时行为不变，仍跑满 max_new_tokens
+            if eot_token is not None and (next_token_index == eot_token).all():
+                break
 
         return token_indices

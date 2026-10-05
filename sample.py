@@ -140,9 +140,10 @@ def build_codec(checkpoint: dict) -> tuple:
     优先用数据集目录里的 meta.pkl（字符级模型用）；没有就用 GPT-2 的 BPE 编码兜底。
 
     输入: checkpoint（dict|None）— resume 模式的检查点，用于定位对应数据集的 meta.pkl。
-    输出: (encode, decode)
+    输出: (encode, decode, eot_token)
           encode（Callable[[str], list[int]]）— 把字符串编码成 token 整数列表。
           decode（Callable[[list[int]], str]）— 把 token 整数列表解码成字符串。
+          eot_token（int|None）— 文本结束符编号（GPT-2 BPE 为 50256）；字符级数据没有则为 None。
     """
     # 到数据集目录里找找有没有 meta 这个 pickle 文件
     load_metadata = False
@@ -170,6 +171,7 @@ def build_codec(checkpoint: dict) -> tuple:
         # lambda 形参: 表达式 = 匿名函数（一次性的小函数）。这行定义 encode：把字符串里每个字符查表换成整数。
         decode = lambda token_list: ''.join([integer_to_string[token_id] for token_id in token_list])
         # ''.join(列表)：用 ''（空串）把列表里的元素拼成一个大字符串。
+        eot_token = None # 字符级数据没有文本结束符，无法据此提前停止
     else:
         # 没有 meta.pkl，默认按 gpt-2 的编码方式来
         print("No meta.pkl found, assuming GPT-2 encodings...")
@@ -180,7 +182,8 @@ def build_codec(checkpoint: dict) -> tuple:
         # encoder.encode(text)：文本 → token 编号列表。allowed_special 告诉它允许哪些特殊 token（如文本结束符）。
         decode = lambda token_list: encoder.decode(token_list)
         # encoder.decode(ids)：token 编号列表 → 文本。
-    return encode, decode
+        eot_token = encoder.eot_token # GPT-2 BPE 的文本结束符编号（50256），用于生成时提前停止
+    return encode, decode, eot_token
 
 
 def main():
@@ -192,7 +195,7 @@ def main():
     gpt_model, checkpoint = load_model(DEVICE)
 
     # ---- 3. 构建文本编解码函数 ----
-    encode, decode = build_codec(checkpoint)
+    encode, decode, eot_token = build_codec(checkpoint)
 
     # ---- 4. 把起始提示词编码成输入张量 ----
     start_text = START
@@ -214,7 +217,7 @@ def main():
         with runtime['autocast_context']:
             for sample_index in range(NUMBER_OF_SAMPLES):
                 # range(n)：内建函数，生成 0,1,...,n-1。
-                generated_indices = gpt_model.generate(input_token_indices, MAX_NEW_TOKENS, temperature=TEMPERATURE, top_k=TOP_K)
+                generated_indices = gpt_model.generate(input_token_indices, MAX_NEW_TOKENS, temperature=TEMPERATURE, top_k=TOP_K, eot_token=eot_token)
                 print(decode(generated_indices[0].tolist()))
                 # generated_indices[0]：取批维度上的第 0 条样本（我们只生成 1 条）。
                 # .tolist()：张量 → Python 列表（decode 需要普通列表）。
