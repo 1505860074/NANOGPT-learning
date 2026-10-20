@@ -308,7 +308,7 @@ def make_data_loader(device, device_type):
         else:   
             data = numpy.memmap(os.path.join(data_directory, 'val.bin'), dtype=numpy.uint16, mode='r')
             random_start_indices = torch.randint(len(data) - BLOCK_SIZE, (BATCH_SIZE,))
-            # 随机选取点起点作为block的起点（每个block包含多个token）
+            # 随机选取点起点作为block的起点（每个block包含多个token）s
             # BATCH_SIZE            = 64    一批有多少个句子
             # BLOCK_SIZE            = 256   每个句子包含多少个token
             # EMBEDDING_DIMENSION   = 384   每个token包含多少个维度的向量  
